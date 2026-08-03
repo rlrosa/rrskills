@@ -5,6 +5,11 @@
 # "CHANGED <file> <mtime>" and exits 0. Run it backgrounded so your harness
 # re-invokes you when it exits:  scripts/watch.sh /tmp/prl-<id>/worker.out &
 #
+# This is the fallback wake-up. When both agents run in tmux panes, notify.sh
+# wakes the counterpart at once and no watcher is needed at all - see TMUX.md.
+# Use this when there is no tmux, or when notify.sh reports it could not reach
+# the counterpart.
+#
 # Rules:
 #   - Keep exactly ONE watcher armed at a time.
 #   - Default poll interval is 60s; pass a second arg to change it (e.g. 30, 120).

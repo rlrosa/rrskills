@@ -6,7 +6,7 @@ You implement the current task and **prove it with raw evidence**. Reports witho
 1. Read the current task at the **top** of `thinker.out`.
 2. Do exactly that task — no more, no less.
 3. For every claim, write `evidence/NN-topic.txt` = the **exact command + its full, unedited output + exit code**.
-4. Write `worker.out` (format below). Then arm exactly one watcher on `thinker.out` and wait.
+4. Write `worker.out` (format below) — always the file first, so the thinker never wakes to a stale report. Then signal and wait: in tmux, ring the thinker's pane with `scripts/notify.sh` and end your turn; otherwise arm exactly one watcher on `thinker.out`. See [TMUX.md](TMUX.md).
 
 ## Evidence rules (non-negotiable)
 - **Raw, not summarized.** Paste the real command and its complete output. A prose summary is not proof.
