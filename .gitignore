@@ -1,0 +1,10 @@
+# Node & testing artifacts
+node_modules/
+test-tmp-*
+*.log
+.tmp/
+tmp/
+
+# OS metadata
+.DS_Store
+Thumbs.db
