@@ -196,7 +196,58 @@ try {
     `bootstrap should be submitted, not left in the input box (saw ${bootstrapCopies} copies)`
   );
 
-  console.log('Running test 8: spawn-worker tells a worker to wait when there is no task yet...');
+  console.log('Running test 8: spawn-worker honours the layout orientation...');
+  // Check the geometry rather than trusting the flag was passed. tmux names a
+  // side-by-side split "horizontal" and a stacked one "vertical", so a wired-up
+  // -h/-v mix-up would still spawn a pane and still look like it worked.
+  const paneGeometry = (pane) => {
+    const [left, top] = tmux([
+      'display-message', '-p', '-t', pane, '#{pane_left} #{pane_top}',
+    ]).split(' ').map(Number);
+    return { left, top };
+  };
+
+  // Read the thinker's position after each split, never before. A split can
+  // move the original pane too — a configured pane border takes a row from
+  // both — so a position measured beforehand is about a layout that no longer
+  // exists.
+  const spawnAndCompare = (dirName, layout) => {
+    const sessionDir = path.join(tmpDir, dirName);
+    const pane = runScript(spawnWorker, [
+      '--session', sessionDir, '--cmd', 'cat', '--layout', layout, '--no-bootstrap',
+    ]).stdout.trim();
+    assert(/^%\d+$/.test(pane), `--layout ${layout} should print a pane id, got '${pane}'`);
+    const geometry = { worker: paneGeometry(pane), thinker: paneGeometry(thinkerPane) };
+    tmux(['kill-pane', '-t', pane]);
+    return geometry;
+  };
+
+  const side = spawnAndCompare('prl-right', 'right');
+  assert(side.worker.left > side.thinker.left, 'a "right" split should put the worker beside the thinker');
+  assert.strictEqual(side.worker.top, side.thinker.top, 'a "right" split should not stack the panes');
+
+  const stacked = spawnAndCompare('prl-below', 'below');
+  assert(stacked.worker.top > stacked.thinker.top, 'a "below" split should put the worker under the thinker');
+  assert.strictEqual(
+    stacked.worker.left,
+    stacked.thinker.left,
+    'a "below" split should not put the panes side by side'
+  );
+
+  const belowDir = path.join(tmpDir, 'prl-below');
+
+  assert.strictEqual(
+    runScript(spawnWorker, ['--session', belowDir, '--cmd', 'cat', '--layout', 'sideways']).code,
+    2,
+    'an unknown layout should be rejected'
+  );
+  assert.strictEqual(
+    runScript(spawnWorker, ['--session', belowDir, '--cmd', 'cat', '--size', '250']).code,
+    2,
+    'an out-of-range size should be rejected'
+  );
+
+  console.log('Running test 9: spawn-worker tells a worker to wait when there is no task yet...');
   const emptyDir = path.join(tmpDir, 'prl-empty');
   const spawnedEmpty = runScript(spawnWorker, ['--session', emptyDir, '--cmd', 'cat', '--layout', 'window']);
   assert.strictEqual(spawnedEmpty.code, 0, `spawn should succeed, got ${spawnedEmpty.stderr}`);
@@ -204,7 +255,7 @@ try {
   const waitText = tmux(['capture-pane', '-p', '-t', emptyPane]).replace(/\n/g, '');
   assert(waitText.includes('wait for its nudge'), 'a worker with no task must be told to wait');
 
-  console.log('Running test 9: watch.sh blocks until the file changes...');
+  console.log('Running test 10: watch.sh blocks until the file changes...');
   // Everything here runs synchronously in the foreground. Polling a spawned
   // child from this thread would not work: execFileSync blocks the event loop,
   // so the child's exit event could never be delivered while we waited for it.

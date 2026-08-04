@@ -81,11 +81,27 @@ scripts/spawn-worker.sh --session /tmp/prl-demo --cmd 'claude --model claude-son
 `--cmd` is passed through verbatim, so it carries whatever model and permission flags you want:
 `'claude'`, `'codex'`, `'agy --dangerously-skip-permissions'`.
 
+Add `--layout below` to stack the worker under the thinker instead of beside it, and `--size 30` to give it less of the split:
+
+```
+scripts/spawn-worker.sh --session /tmp/prl-demo --cmd 'codex' --layout below --size 30
+```
+
 **Write `<session>/thinker.out` before spawning.** The bootstrap message then points the worker straight at its first task and the loop starts without a further nudge. If the file is missing, the worker is told to wait instead — a worker pointed at a file that does not exist will improvise, which is what the protocol exists to prevent.
 
 What it does:
 
-1. Splits the thinker's own window (`--layout window` for a separate window instead; it falls back to a new window automatically when the window is too small to split).
+1. Splits the thinker's own window, falling back to a new window automatically when the window is too small to divide.
+
+   `--layout` is named after the resulting geometry, not tmux's `-h`/`-v`, which read backwards to most people:
+
+   | `--layout` | Result | Aliases |
+   | --- | --- | --- |
+   | `right` | Side by side, worker on the right. Default. | `split`, `horizontal`, `h` |
+   | `below` | Stacked, worker underneath. | `vertical`, `v` |
+   | `window` | A new window of its own. | |
+
+   `--size <n>` sets the worker pane's share of the split as a percentage, 1–99 (default 50). A tall terminal suits `below`; a wide one suits `right`.
 2. Starts the pane on a plain shell and types the agent command into it, so the pane survives the agent exiting and you can still read the failure.
 3. Waits for the agent to replace the shell as the pane's foreground command, then for the pane to stop redrawing. Both matter: an agent is the foreground command seconds before its TUI will accept a keystroke.
 4. Sends one bootstrap line invoking this skill and naming the role, the session dir and both pane IDs, retrying until the pane confirms it took the message:

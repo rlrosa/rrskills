@@ -23,8 +23,11 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 
+# Print the header comment as the help text, stopping at the first line of code.
+# Reading where the block ends rather than hardcoding a line range keeps the two
+# from drifting apart when the header grows.
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
   exit "${1:-0}"
 }
 
