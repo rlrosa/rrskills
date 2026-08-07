@@ -56,6 +56,17 @@ prl_capture() {
   tmux capture-pane -p -t "$1" 2>/dev/null
 }
 
+# Print a pane's cursor position as "column,row".
+#
+# This is the one honest answer to "is there anything in the input box". Agent
+# TUIs display greyed-out placeholder suggestions there — codex offers "Write
+# tests for @filename" — and reading the screen cannot tell that apart from a
+# message somebody typed. The cursor can: a placeholder leaves it parked at the
+# start of the box, real characters push it along.
+prl_cursor() {
+  tmux display-message -p -t "$1" '#{cursor_x},#{cursor_y}' 2>/dev/null
+}
+
 # Stamp a pane with the session it serves and the member it is running, so the
 # pane itself carries its identity.
 #
@@ -128,37 +139,52 @@ prl_wait_ready() {
 # Type a line into a pane and submit it, checking both halves actually took
 # effect. Returns 1 if the text or the Enter never got through.
 #
-# Both halves need checking, and for different reasons. A TUI that is still
-# starting up has not begun reading its input, so what you type sits in the
-# terminal buffer: the characters are echoed to the screen, which makes the
-# message *look* delivered, but the Enter that follows is discarded and the
-# message is left parked in the input box forever. Watching for the pane to
-# react to the Enter is what separates "typed" from "sent".
+# Both halves need checking, and they fail for different reasons.
+#
+# The text can vanish: a TUI that is still starting up has not begun reading its
+# input, so what you type sits in the terminal buffer unread.
+#
+# The Enter can vanish on its own, and this is the failure that looks like
+# success — the characters are echoed to the screen, so the message appears
+# delivered, but the Enter is discarded and the message sits in the input box
+# forever. "Typed" is not "sent", so both are checked separately.
+#
+# Each check reads the cursor first and the screen only as a fallback. The
+# cursor is the more trustworthy of the two: it moves only for real characters,
+# and it returns to the start of the box when a message is actually submitted.
 prl_send_verified() {
   local pane="$1" text="$2" attempts="${3:-20}"
-  local probe count_before count_after screen_before_enter attempt enter_press
+  local probe count_before count_after attempt enter_press
+  local cursor_before cursor_typed screen_before_enter
   # Compare a short leading slice rather than the whole message. The TUI wraps a
   # long line across rows, so the full string never appears verbatim on screen.
   probe=${text:0:20}
   for ((attempt = 1; attempt <= attempts; attempt++)); do
+    cursor_before=$(prl_cursor "$pane")
     count_before=$(prl_capture "$pane" | grep -cF -- "$probe")
     tmux send-keys -t "$pane" -l -- "$text" || return 1
     sleep "$PRL_SEND_DELAY"
+    cursor_typed=$(prl_cursor "$pane")
     count_after=$(prl_capture "$pane" | grep -cF -- "$probe")
+
     # Count occurrences rather than just looking for the text: an earlier
     # round's nudge may still be on screen, and that must not read as this one
-    # arriving.
-    if [ "$count_after" -gt "$count_before" ]; then
-      # Press Enter until the pane visibly responds. A stray Enter on an empty
-      # input box does nothing in these TUIs, so retrying is safe.
+    # arriving. The cursor having moved settles it either way.
+    if [ "$cursor_typed" != "$cursor_before" ] || [ "$count_after" -gt "$count_before" ]; then
+      # Press Enter until the message is gone from the input box. A stray Enter
+      # on an empty box does nothing in these TUIs, so retrying is safe.
       for ((enter_press = 1; enter_press <= 5; enter_press++)); do
         screen_before_enter=$(prl_capture "$pane")
         tmux send-keys -t "$pane" Enter
         sleep 1
+        # The cursor snapping back from where the typing left it means the box
+        # emptied, which is what submitted actually looks like.
+        [ "$(prl_cursor "$pane")" != "$cursor_typed" ] && return 0
         [ "$(prl_capture "$pane")" != "$screen_before_enter" ] && return 0
       done
       return 1
     fi
+
     # Nothing arrived at all. Clear anything that half-landed so a retry cannot
     # end up typing the message twice into the same input box.
     tmux send-keys -t "$pane" C-u

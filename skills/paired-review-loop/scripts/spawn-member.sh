@@ -221,12 +221,13 @@ while prl_pane_is_shell "$MEMBER_PANE"; do
   sleep 1
 done
 
-if [ "$BOOTSTRAP" = true ]; then
-  # Let the agent finish drawing its opening screen. Typing into a TUI that is
-  # still painting gets the characters echoed by the terminal but the Enter
-  # thrown away, which parks the bootstrap in the input box unsent.
-  prl_wait_ready "$MEMBER_PANE"
+# Let the agent finish drawing its opening screen before typing at it or
+# reading its status line. Typing into a TUI that is still painting gets the
+# characters echoed by the terminal but the Enter thrown away, which parks the
+# bootstrap in the input box unsent.
+prl_wait_ready "$MEMBER_PANE"
 
+if [ "$BOOTSTRAP" = true ]; then
   # Point the member at its first task only if there is one. A member told to
   # read a file that does not exist yet will improvise, which is exactly what
   # the protocol is designed to prevent.
@@ -248,6 +249,19 @@ if [ "$BOOTSTRAP" = true ]; then
     echo "$MEMBER_PANE"
     exit 1
   fi
+fi
+
+# Claude Code drops to manual mode when the chosen model cannot run the
+# auto-mode classifier. Haiku 4.5 does this even when --permission-mode auto is
+# passed: the flag is accepted, exits 0, and is ignored. A manual-mode member
+# stops at its first approval prompt and waits, which from the outside is
+# indistinguishable from working — one such member sat blocked for 89 minutes
+# during testing. Say it at spawn time instead.
+if prl_capture "$MEMBER_PANE" | grep -q 'manual mode'; then
+  echo "spawn-member: '$MEMBER_NAME' came up in MANUAL mode and will stop at its first" >&2
+  echo "spawn-member: approval prompt, waiting for a human who may not be watching." >&2
+  echo "spawn-member: Auto mode needs a Sonnet-class model or better - either give it one," >&2
+  echo "spawn-member: or plan to answer its prompts in pane $MEMBER_PANE yourself." >&2
 fi
 
 echo "$MEMBER_PANE"

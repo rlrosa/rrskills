@@ -214,7 +214,38 @@ try {
     'a tester broadcast must not reach the worker'
   );
 
-  console.log('Running test 8: watch.sh returns on whichever mailbox changes...');
+  console.log('Running test 8: a placeholder in the input box does not block a send...');
+  // Agent TUIs draw a greyed-out suggestion in an empty input box. Anything
+  // that reads the screen to decide whether the box is free sees that text and
+  // refuses to send. The cursor is what distinguishes them, so stand up a pane
+  // showing text the cursor is NOT sitting behind and prove a nudge still lands.
+  const ghostPane = tmux(['split-window', '-d', '-t', thinkerPane, '-P', '-F', '#{pane_id}']);
+  tmux(['send-keys', '-t', ghostPane, '-l', "printf 'Write tests for @filename\\r'; cat"]);
+  tmux(['send-keys', '-t', ghostPane, 'Enter']);
+  execFileSync('sleep', ['1']);
+
+  const ghostScreen = tmux(['capture-pane', '-p', '-t', ghostPane]);
+  const ghostCursorColumn = Number(tmux(['display-message', '-p', '-t', ghostPane, '#{cursor_x}']));
+  assert(ghostScreen.includes('Write tests for @filename'), 'the pane should show placeholder-like text');
+  assert.strictEqual(ghostCursorColumn, 0, 'the cursor must stay at the start despite the visible text');
+
+  runScript(roster, ['add', sessionDir, 'ghost', 'tester', ghostPane, tmpDir, 'cat']);
+  const ghostSend = runScript(notify, [
+    '--session', sessionDir, '--member', 'ghost', 'prl: sent past the placeholder',
+  ]);
+  assert.strictEqual(ghostSend.code, 0, `a placeholder must not block delivery: ${ghostSend.stderr}`);
+  assert(
+    tmux(['capture-pane', '-p', '-t', ghostPane]).includes('prl: sent past the placeholder'),
+    'the message should have reached the pane'
+  );
+  // Typed and sent are different things: `cat` echoes a line only once the
+  // Enter is delivered, so a second copy is proof the submit half worked.
+  const ghostCopies = tmux(['capture-pane', '-p', '-t', ghostPane])
+    .split('prl: sent past the placeholder').length - 1;
+  assert(ghostCopies >= 2, `the message should be submitted, not parked (saw ${ghostCopies} copies)`);
+  tmux(['kill-pane', '-t', ghostPane]);
+
+  console.log('Running test 9: watch.sh returns on whichever mailbox changes...');
   // The thinker waits on every member at once when there is no tmux, so a
   // change to any one of them has to end the wait — not only the first listed.
   const outFiles = ['worker', 'tester-1', 'tester-2'].map((name) => {

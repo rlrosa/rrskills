@@ -55,6 +55,15 @@ scripts/notify.sh <pane-id> <message>                         # raw, unchecked
 
 **Address by name, not by pane ID.** The named forms make the pane prove who it is first; a raw `%N` you cached earlier is how a task ends up in the wrong agent's terminal.
 
+**Never hand-roll `tmux send-keys` yourself.** It looks like a one-liner and it is not. Two failure modes bite agents that try, and both look like success:
+
+- **The Enter goes missing.** You type the text, the characters appear, and the message sits in the input box unsent — forever. A TUI that has not started reading input swallows the Enter, and a screen that shows your text is not proof it was submitted. `notify.sh` presses Enter until the input box actually empties.
+- **A placeholder is mistaken for someone else's message.** Agent TUIs show greyed-out suggestions in an empty input box — codex offers `Write tests for @filename` — and an agent that reads the screen to check "is the box free?" sees text and refuses to send. Do not check the screen for that. **Check the cursor**: a placeholder leaves it parked at the start of the box, real characters push it along.
+
+  Measured on an idle codex pane: placeholder showing, `#{cursor_x}` = 2. After typing 11 characters, 13. After `C-u`, back to 2 with the placeholder redrawn. The screen changed every time; only the cursor told the truth.
+
+`notify.sh` uses the cursor for both checks and falls back to the screen only when a TUI does not move it.
+
 Write your file first, then notify — otherwise the recipient wakes up and reads the previous round.
 
 Keep the message to one line that names the file to read:
@@ -169,7 +178,8 @@ Every member's CLI must already have this skill installed — `./install.sh` fro
 - **Nudges land but nothing happens.** The counterpart is mid-turn; its harness queues the message. Wait a round before re-sending.
 - **Exit 12 right after spawning.** The agent exited on startup. Look at the pane — it is still there on purpose — and check the command and its permission flags.
 - **Spawn times out.** The agent never came up within 60s. The pane ID is printed anyway; go look at it. Raise the limit with `PRL_SPAWN_TIMEOUT` on a cold start.
-- **A message is sitting unsent in the counterpart's input box.** Its TUI was still starting when the text was typed: the terminal echoed the characters, but the program had not begun reading, so the Enter went nowhere. The scripts handle this by pressing Enter until the pane reacts, and by letting a freshly spawned agent finish drawing before typing at it. If you hit it anyway, press Enter in the pane and raise `PRL_BOOTSTRAP_ATTEMPTS` (default 30) or `PRL_SEND_DELAY` (default 0.3s, the gap between the text and the Enter).
+- **A message is sitting unsent in the recipient's input box.** Its TUI was still starting when the text was typed: the terminal echoed the characters, but the program had not begun reading, so the Enter went nowhere. The scripts handle this by pressing Enter until the input box empties, and by letting a freshly spawned agent finish drawing before typing at it. If you hit it anyway, press Enter in the pane and raise `PRL_BOOTSTRAP_ATTEMPTS` (default 30) or `PRL_SEND_DELAY` (default 0.3s, the gap between the text and the Enter). If you are seeing this from something other than `notify.sh`, that is the bug — use `notify.sh`.
+- **Something refuses to send because the input box "has text in it".** That text is almost certainly a placeholder suggestion, not a real message. Check `#{cursor_x}`, not the screen.
 - **Characters arrive but do something strange.** A TUI in vim mode reads keystrokes as editing commands unless it is in insert mode. Check the pane's mode before blaming the transport.
 - **Exit 14, or a member answering someone else's task.** The roster and the panes disagree. `roster.sh verify` shows which; `roster.sh sync` rebuilds the file from the panes. Do not send anything else until they agree.
 - **A member went quiet for a round.** `roster.sh verify` distinguishes the cases that look identical from outside: `EXITED` (agent gone, pane at a shell), `GONE` (pane closed), `MISMATCH` (someone else is there now), `OK` (it is simply still working).

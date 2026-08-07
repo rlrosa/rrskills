@@ -24,8 +24,16 @@
 #       after losing or corrupting the file, or when panes were moved by hand.
 #
 #   roster.sh verify <session-dir>
-#       Report members whose pane is gone, members whose pane now belongs to
-#       someone else, and live panes missing from the roster. Exits 1 if any.
+#       Report the state of every member. Exits 1 if any need attention.
+#           OK        working, or done and waiting for its next task
+#           WAITING   frozen with its task unanswered - almost always stopped
+#                     on an approval prompt nobody is watching
+#           EXITED    its agent quit; the pane is back at a shell
+#           GONE      its pane was closed
+#           MISMATCH  its pane now belongs to a different member
+#           UNLISTED  a pane tagged for this session that the roster forgot
+#       Telling WAITING from OK needs a moment to see whether the pane is
+#       redrawing; set PRL_VERIFY_SAMPLE=0 to skip that and never report it.
 #
 # roster.tsv is tab-separated `name role agent pane cwd`, one member per line,
 # with a comment header. The panes carry the same facts as tmux options
@@ -44,6 +52,11 @@ usage() {
 }
 
 ROSTER_HEADER=$'# name\trole\tagent\tpane\tcwd'
+
+# Seconds `verify` watches a pane to see whether it is redrawing. Long enough to
+# catch a once-a-second status counter; 0 turns the check off, which makes
+# verify instant but unable to tell a stalled member from a busy one.
+PRL_VERIFY_SAMPLE="${PRL_VERIFY_SAMPLE:-2}"
 
 roster_path() {
   printf '%s/roster.tsv' "$1"
@@ -196,26 +209,75 @@ case "$VERB" in
     SESSION=$(cd "$SESSION" && pwd)
     ROSTER=$(require_roster "$SESSION")
     problems=0
+    declare -a names=()
+    declare -A member_state=() member_detail=() member_pane=() first_screen=()
+
+    # First pass: settle the states that need no sampling, and photograph the
+    # panes that are still in play.
     while IFS=$'\t' read -r name role agent pane member_cwd; do
       case "$name" in '#'* | '') continue ;; esac
+      names+=("$name")
+      member_pane[$name]="$pane"
       if ! prl_pane_exists "$pane"; then
-        echo "GONE      $name (pane $pane no longer exists)"
-        problems=$((problems + 1))
+        member_state[$name]=GONE
+        member_detail[$name]="pane $pane no longer exists"
         continue
       fi
       actual=$(prl_pane_tag "$pane" prl_member)
       if [ "$actual" != "$name" ]; then
-        echo "MISMATCH  $name (pane $pane is now '${actual:-untagged}')"
-        problems=$((problems + 1))
+        member_state[$name]=MISMATCH
+        member_detail[$name]="pane $pane is now '${actual:-untagged}'"
         continue
       fi
       if prl_pane_is_shell "$pane"; then
-        echo "EXITED    $name (pane $pane is back at a shell prompt)"
-        problems=$((problems + 1))
+        member_state[$name]=EXITED
+        member_detail[$name]="pane $pane is back at a shell prompt"
         continue
       fi
-      echo "OK        $name	$role	$pane	$agent"
+      member_state[$name]=LIVE
+      member_detail[$name]="$role	$pane	$agent"
+      first_screen[$name]=$(prl_capture "$pane")
     done < "$ROSTER"
+
+    # A working agent redraws — the elapsed-time counter in its status line
+    # ticks every second — while one sitting on an approval prompt is frozen.
+    # That is the only thing separating "still thinking" from "waiting for a
+    # human", and the two look identical without it.
+    #
+    # One sleep covers the whole team: everyone was photographed before it and
+    # is compared after, so verifying six members costs the same as one.
+    if [ "$PRL_VERIFY_SAMPLE" != "0" ]; then
+      for name in "${names[@]}"; do
+        [ "${member_state[$name]}" = LIVE ] && { sleep "$PRL_VERIFY_SAMPLE"; break; }
+      done
+    fi
+
+    for name in "${names[@]}"; do
+      state="${member_state[$name]}"
+      if [ "$state" = LIVE ]; then
+        state=OK
+        if [ "$PRL_VERIFY_SAMPLE" != "0" ] &&
+          [ "$(prl_capture "${member_pane[$name]}")" = "${first_screen[$name]}" ]; then
+          # The screen has not moved. That is only a problem if the member owes
+          # a reply: a member that has already answered its current task is
+          # supposed to sit still.
+          inbox="$SESSION/members/$name/in"
+          outbox="$SESSION/members/$name/out"
+          if [ -s "$inbox" ] && { [ ! -s "$outbox" ] || [ "$inbox" -nt "$outbox" ]; }; then
+            state=WAITING
+            member_detail[$name]="pane ${member_pane[$name]} is frozen with its task unanswered - probably stopped on an approval prompt"
+          fi
+        fi
+      fi
+
+      case "$state" in
+        OK) echo "OK        $name	${member_detail[$name]}" ;;
+        *)
+          printf '%-9s %s (%s)\n' "$state" "$name" "${member_detail[$name]}"
+          problems=$((problems + 1))
+          ;;
+      esac
+    done
 
     while IFS=$'\t' read -r pane member role agent member_cwd; do
       [ -z "$member" ] && continue
