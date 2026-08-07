@@ -2,6 +2,8 @@
 
 AI Assistant Skills collection for **Claude Code**, **AGY (Antigravity)**, and **OpenAI Codex**.
 
+Current version: **0.2.0** (see `VERSION`). Released versions are git tags, `v<version>`.
+
 ## Skills Included
 
 - **`paired-review-loop`**: File-based review & verification loop where a thinker (reviewer/orchestrator) drives a team — a worker that implements, plus optional testers that run things and capture evidence — verifying all proof before accepting. Under tmux the thinker spawns each member's pane with the agent and model you choose (`claude --model ...`, `codex`, `agy ...`), they wake each other instantly via `tmux send-keys` instead of polling, and each pane is tagged with its identity so a stale roster can never send a task to the wrong agent.
