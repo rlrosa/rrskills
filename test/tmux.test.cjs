@@ -9,7 +9,7 @@ const scriptsDir = path.join(repoRoot, 'skills', 'paired-review-loop', 'scripts'
 const notify = path.join(scriptsDir, 'notify.sh');
 const watch = path.join(scriptsDir, 'watch.sh');
 const session = path.join(scriptsDir, 'session.sh');
-const spawnWorker = path.join(scriptsDir, 'spawn-worker.sh');
+const spawnMember = path.join(scriptsDir, 'spawn-member.sh');
 
 function hasTmux() {
   try {
@@ -128,7 +128,7 @@ try {
   tmux(['send-keys', '-t', thinkerPane, '-l', 'cat']);
   tmux(['send-keys', '-t', thinkerPane, 'Enter']);
   waitForPaneCommand(thinkerPane, 'cat');
-  const message = 'prl: worker.out updated - read /tmp/prl-demo/worker.out';
+  const message = 'prl: inbox updated - read /tmp/prl-demo/members/worker/in';
   const delivered = runScript(notify, [thinkerPane, message]);
   assert.strictEqual(delivered.code, 0, `delivery should exit 0, got ${delivered.code} ${delivered.stderr}`);
   assert(delivered.stdout.includes('DELIVERED'), 'should report delivery');
@@ -142,7 +142,8 @@ try {
   console.log('Running test 6: session.sh init/register/get...');
   const sessionDir = path.join(tmpDir, 'prl-session');
   runScript(session, ['init', sessionDir]);
-  assert(fs.existsSync(path.join(sessionDir, 'evidence')), 'init should create evidence/');
+  assert(fs.existsSync(path.join(sessionDir, 'members')), 'init should create members/');
+  assert(fs.existsSync(path.join(sessionDir, 'roster.tsv')), 'init should create an empty roster');
   runScript(session, ['register', sessionDir, 'thinker']);
   // Registering twice must overwrite, not append a second conflicting line.
   runScript(session, ['register', sessionDir, 'thinker']);
@@ -159,12 +160,14 @@ try {
     'get should exit 1 for an unset key'
   );
 
-  console.log('Running test 7: spawn-worker creates and bootstraps a pane...');
+  console.log('Running test 7: spawn-member creates and bootstraps a pane...');
   const spawnDir = path.join(tmpDir, 'prl-spawn');
   fs.mkdirSync(spawnDir, { recursive: true });
-  fs.writeFileSync(path.join(spawnDir, 'thinker.out'), 'TASK: prove you are alive\n');
-  const spawned = runScript(spawnWorker, [
+  fs.mkdirSync(path.join(spawnDir, 'members', 'worker'), { recursive: true });
+  fs.writeFileSync(path.join(spawnDir, 'members', 'worker', 'in'), 'TASK: prove you are alive\n');
+  const spawned = runScript(spawnMember, [
     '--session', spawnDir,
+    '--name', 'worker',
     '--cmd', 'cat',
     '--cwd', tmpDir,
   ]);
@@ -176,15 +179,29 @@ try {
 
   const spawnEnv = fs.readFileSync(path.join(spawnDir, 'session.env'), 'utf8');
   assert(spawnEnv.includes(`PRL_THINKER_PANE='${thinkerPane}'`), 'session.env should record the thinker pane');
-  assert(spawnEnv.includes(`PRL_WORKER_PANE='${workerPane}'`), 'session.env should record the worker pane');
-  assert(spawnEnv.includes("PRL_WORKER_CMD='cat'"), 'session.env should record the worker command');
+
+  // Members live in the roster, not session.env, and the pane carries the same
+  // facts so the two can be checked against each other.
+  const spawnRoster = fs.readFileSync(path.join(spawnDir, 'roster.tsv'), 'utf8');
+  assert(
+    spawnRoster.includes(['worker', 'worker', 'cat', workerPane].join('\t')),
+    `roster should record the member, got: ${spawnRoster}`
+  );
+  assert.strictEqual(
+    tmux(['display-message', '-p', '-t', workerPane, '#{@prl_member}']),
+    'worker',
+    'the pane should be tagged with the member name'
+  );
 
   // Strip the newlines the terminal inserts when it wraps the long bootstrap
   // line, so the text can be matched as it was written.
   const bootstrap = tmux(['capture-pane', '-p', '-t', workerPane]).replace(/\n/g, '');
   assert(bootstrap.includes('/paired-review-loop'), 'bootstrap should invoke the skill');
   assert(bootstrap.includes('You are the WORKER'), 'bootstrap should name the role');
-  assert(bootstrap.includes(path.join(spawnDir, 'thinker.out')), 'bootstrap should point at the first task');
+  assert(
+    bootstrap.includes(path.join(spawnDir, 'members', 'worker', 'in')),
+    'bootstrap should point at the first task'
+  );
 
   // Typed is not the same as sent. A TUI that is still starting up echoes the
   // characters but drops the Enter, leaving the bootstrap parked in the input
@@ -196,7 +213,7 @@ try {
     `bootstrap should be submitted, not left in the input box (saw ${bootstrapCopies} copies)`
   );
 
-  console.log('Running test 8: spawn-worker honours the layout orientation...');
+  console.log('Running test 8: spawn-member honours the layout orientation...');
   // Check the geometry rather than trusting the flag was passed. tmux names a
   // side-by-side split "horizontal" and a stacked one "vertical", so a wired-up
   // -h/-v mix-up would still spawn a pane and still look like it worked.
@@ -213,8 +230,8 @@ try {
   // exists.
   const spawnAndCompare = (dirName, layout) => {
     const sessionDir = path.join(tmpDir, dirName);
-    const pane = runScript(spawnWorker, [
-      '--session', sessionDir, '--cmd', 'cat', '--layout', layout, '--no-bootstrap',
+    const pane = runScript(spawnMember, [
+      '--session', sessionDir, '--name', 'worker', '--cmd', 'cat', '--layout', layout, '--no-bootstrap',
     ]).stdout.trim();
     assert(/^%\d+$/.test(pane), `--layout ${layout} should print a pane id, got '${pane}'`);
     const geometry = { worker: paneGeometry(pane), thinker: paneGeometry(thinkerPane) };
@@ -237,19 +254,19 @@ try {
   const belowDir = path.join(tmpDir, 'prl-below');
 
   assert.strictEqual(
-    runScript(spawnWorker, ['--session', belowDir, '--cmd', 'cat', '--layout', 'sideways']).code,
+    runScript(spawnMember, ['--session', belowDir, '--name', 'worker', '--cmd', 'cat', '--layout', 'sideways']).code,
     2,
     'an unknown layout should be rejected'
   );
   assert.strictEqual(
-    runScript(spawnWorker, ['--session', belowDir, '--cmd', 'cat', '--size', '250']).code,
+    runScript(spawnMember, ['--session', belowDir, '--name', 'worker', '--cmd', 'cat', '--size', '250']).code,
     2,
     'an out-of-range size should be rejected'
   );
 
-  console.log('Running test 9: spawn-worker tells a worker to wait when there is no task yet...');
+  console.log('Running test 9: spawn-member tells a member to wait when there is no task yet...');
   const emptyDir = path.join(tmpDir, 'prl-empty');
-  const spawnedEmpty = runScript(spawnWorker, ['--session', emptyDir, '--cmd', 'cat', '--layout', 'window']);
+  const spawnedEmpty = runScript(spawnMember, ['--session', emptyDir, '--name', 'worker', '--cmd', 'cat', '--layout', 'window']);
   assert.strictEqual(spawnedEmpty.code, 0, `spawn should succeed, got ${spawnedEmpty.stderr}`);
   const emptyPane = spawnedEmpty.stdout.trim();
   const waitText = tmux(['capture-pane', '-p', '-t', emptyPane]).replace(/\n/g, '');

@@ -16,33 +16,52 @@ Your own pane ID is in `$TMUX_PANE`. Pane IDs look like `%174`, are unique acros
 
 ## Finding the counterpart's pane
 
-Pane IDs live in `<session>/session.env`, which both sides read:
+The thinker's pane lives in `<session>/session.env`:
 
 ```
 PRL_SESSION_DIR='/tmp/prl-demo'
 PRL_THINKER_PANE='%174'
-PRL_WORKER_PANE='%180'
-PRL_WORKER_CMD='claude --model claude-sonnet-5'
-PRL_WORKER_CWD='/home/rrosa/repo'
 ```
 
-- `scripts/spawn-worker.sh` writes every key when the thinker starts the worker itself.
-- When the two agents were started by hand, each registers itself once: `scripts/session.sh register <session-dir> thinker` (or `worker`).
-- Read one value with `scripts/session.sh get <session-dir> PRL_WORKER_PANE`, or source the file.
+Every member's pane lives in `<session>/roster.tsv`:
+
+```
+# name     role     agent                          pane   cwd
+worker     worker   claude --model claude-sonnet-5 %180   /home/rrosa/repo
+tester-1   tester   codex                          %181   /home/rrosa/repo
+tester-2   tester   agy --dangerously-skip-permissions %182 /home/rrosa/repo
+```
+
+- `spawn-member.sh` and `spawn-team.sh` fill both in as they start each agent.
+- Started by hand? The thinker runs `scripts/session.sh register <dir> thinker`; each member runs `scripts/roster.sh add <dir> <name> <role> $TMUX_PANE $PWD '<agent>'`.
+- Read one field with `scripts/roster.sh get <dir> worker pane`.
+
+### The roster is a cache, not the truth
+
+Every member's pane is also **tagged with its own identity** — `@prl_session`, `@prl_member`, `@prl_role`, `@prl_cmd` — as tmux pane options. Two consequences worth relying on:
+
+- **A stale roster cannot misdeliver.** `roster.sh resolve` (which `notify.sh --member` uses) checks the pane's tag against the name you asked for and refuses if they disagree.
+- **A lost roster is recoverable.** `scripts/roster.sh sync <dir>` rebuilds the whole file by scanning tagged panes across the tmux server, agent command and all. Deleting `roster.tsv` is survivable; the panes still know who they are.
+
+`scripts/roster.sh verify <dir>` prints one line per member — `OK`, `GONE`, `EXITED`, `MISMATCH` — plus `UNLISTED` for tagged panes missing from the file. Run it whenever a notify fails or a member goes quiet.
 
 ## Ringing the doorbell
 
 ```
-scripts/notify.sh <pane-id> <message>
+scripts/notify.sh --session <dir> --member <name> <message>   # preferred
+scripts/notify.sh --session <dir> --role tester <message>     # every tester
+scripts/notify.sh <pane-id> <message>                         # raw, unchecked
 ```
 
-Write your file first, then notify — otherwise the counterpart wakes up and reads the previous round.
+**Address by name, not by pane ID.** The named forms make the pane prove who it is first; a raw `%N` you cached earlier is how a task ends up in the wrong agent's terminal.
+
+Write your file first, then notify — otherwise the recipient wakes up and reads the previous round.
 
 Keep the message to one line that names the file to read:
 
 ```
-prl: thinker.out updated - read /tmp/prl-demo/thinker.out
-prl: worker.out updated - round 3 report + evidence/04-*.txt
+prl: your inbox was updated - read /tmp/prl-demo/members/worker/in
+prl: worker reported - round 3 + evidence/04-*.txt
 ```
 
 **Start the message with `prl:`.** Agent TUIs read a leading `/`, `#` or `!` as a mode switch — slash command, memory, shell — so a nudge starting with one of those gets acted on instead of read.
@@ -56,64 +75,93 @@ prl: worker.out updated - round 3 report + evidence/04-*.txt
 | `11` | No such pane | The counterpart is gone. Tell the human. |
 | `12` | Pane is at a shell prompt | Its agent has exited. Nothing was sent. Tell the human; do not retry. |
 | `13` | Keys sent, pane did not react | Treat as unreliable: arm a watcher as well, and say so. |
+| `14` | The pane says it is someone else | Roster is stale. Nothing was sent. `roster.sh verify`, then fix it before sending to anyone. |
 | `2` | Bad usage (multi-line message) | Fix the call. |
 
-Exit `12` is the one worth understanding. A pane whose agent has exited is a live shell, and typing a message into a shell runs it as a command. `notify.sh` checks the pane's foreground command and refuses to send in that case, so a dead worker fails loudly instead of executing your prose.
+Two of these exist to stop a send rather than report one, and both fail *before* typing anything:
 
-A delivered nudge proves the keystrokes landed, not that the counterpart understood them. Only its reply on its own file proves that.
+- **`12`** — a pane whose agent has exited is a live shell, and typing a message into a shell runs it as a command. `notify.sh` checks the pane's foreground command first.
+- **`14`** — the pane's `@prl_member` tag does not match the member you addressed. Something reused or retagged that pane, so the roster is lying about where that agent is.
+
+With `--role`, each member is reported separately and the exit code is the worst one seen, so one dead tester does not hide the others succeeding.
+
+A delivered nudge proves the keystrokes landed, not that the recipient understood them. Only its reply on its own file proves that.
 
 ## Waiting
 
 **With tmux, arm nothing.** Finish your turn and stop. The counterpart's nudge re-invokes you when there is something to read. There is no polling and no 60s floor on the round trip.
 
-**Without tmux**, or after any non-zero exit above, fall back to the watcher: `scripts/watch.sh <counterpart-file> [interval_s=60]`, backgrounded, exactly one at a time.
-
-You can also run both — nudge the counterpart *and* arm a long watcher (say 300s) — if you want a backstop against a nudge that was delivered but silently ignored. Kill the watcher when you wake.
-
-## Spawning a worker
-
-The thinker can open the worker's pane and start the agent in it:
+**Without tmux**, or after any non-zero exit above, fall back to the watcher, backgrounded, exactly one at a time. It takes several files and returns on the first to change, which is what a thinker waiting on a whole team needs:
 
 ```
-scripts/spawn-worker.sh --session /tmp/prl-demo --cmd 'claude --model claude-sonnet-5' --cwd /path/to/repo
+scripts/watch.sh /tmp/prl-demo/members/*/out --interval 60 &
+```
+
+Waking is still not reading: whichever file fired, the thinker reads **every** member's `out`, because others may have reported while it was busy.
+
+You can also run both — nudge *and* arm a long watcher (say 300s) — as a backstop against a nudge that was delivered but silently ignored. Kill the watcher when you wake.
+
+## Spawning one member
+
+```
+scripts/spawn-member.sh --session /tmp/prl-demo --name worker --role worker \
+  --cmd 'claude --model claude-sonnet-5' --cwd /path/to/repo
 ```
 
 `--cmd` is passed through verbatim, so it carries whatever model and permission flags you want:
 `'claude'`, `'codex'`, `'agy --dangerously-skip-permissions'`.
 
-Add `--layout below` to stack the worker under the thinker instead of beside it, and `--size 30` to give it less of the split:
+Add `--layout below` to stack the pane under the thinker instead of beside it, and `--size 30` to give it less of the split.
+
+**Write `<session>/members/<name>/in` before spawning.** The bootstrap message then points the member straight at its first task and it starts without a further nudge. If the file is missing, the member is told to wait instead — an agent pointed at a file that does not exist will improvise, which is what the protocol exists to prevent.
+
+## Spawning a whole team
 
 ```
-scripts/spawn-worker.sh --session /tmp/prl-demo --cmd 'codex' --layout below --size 30
+scripts/spawn-team.sh --session /tmp/prl-demo --spec team.txt --cwd /path/to/repo
 ```
 
-**Write `<session>/thinker.out` before spawning.** The bootstrap message then points the worker straight at its first task and the loop starts without a further nudge. If the file is missing, the worker is told to wait instead — a worker pointed at a file that does not exist will improvise, which is what the protocol exists to prevent.
+```
+# name      role     agent
+worker      worker   claude --model claude-sonnet-5
+tester-1    tester   codex
+tester-2    tester   agy --dangerously-skip-permissions
+```
 
-What it does:
+Everything after the role is the agent command, so it may contain flags and spaces. `-` as the spec reads it from stdin.
 
-1. Splits the thinker's own window, falling back to a new window automatically when the window is too small to divide.
+The first member gets a new window named `prl-<session>`; the rest are split into it and the window is re-tiled after each one, so nobody ends up in a sliver. Each spawn waits for its own agent to become interactive, so later members start up while earlier ones are still being bootstrapped — three stand-in members came up in under 10s.
+
+Past **6 members** it warns: tiled panes stop being readable, and every member spends tokens every round. It is a warning, not a refusal — your terminal, your budget.
+
+If a member fails to start, the ones already up are left running. `scripts/roster.sh verify` tells you where you got to.
+
+What a spawn does, step by step:
+
+1. Opens the pane, falling back to a new window automatically when the window is too small to divide.
 
    `--layout` is named after the resulting geometry, not tmux's `-h`/`-v`, which read backwards to most people:
 
    | `--layout` | Result | Aliases |
    | --- | --- | --- |
-   | `right` | Side by side, worker on the right. Default. | `split`, `horizontal`, `h` |
-   | `below` | Stacked, worker underneath. | `vertical`, `v` |
+   | `right` | Side by side, on the right. Default. | `split`, `horizontal`, `h` |
+   | `below` | Stacked, underneath. | `vertical`, `v` |
    | `window` | A new window of its own. | |
 
-   `--size <n>` sets the worker pane's share of the split as a percentage, 1–99 (default 50). A tall terminal suits `below`; a wide one suits `right`.
-2. Starts the pane on a plain shell and types the agent command into it, so the pane survives the agent exiting and you can still read the failure.
-3. Waits for the agent to replace the shell as the pane's foreground command, then for the pane to stop redrawing. Both matter: an agent is the foreground command seconds before its TUI will accept a keystroke.
-4. Sends one bootstrap line invoking this skill and naming the role, the session dir and both pane IDs, retrying until the pane confirms it took the message:
+   `--size <n>` sets the new pane's share of the split as a percentage, 1–99 (default 50). A tall terminal suits `below`; a wide one suits `right`. `--into <pane-id>` splits a pane other than the thinker's, which is how `spawn-team.sh` gathers everyone into one window.
+2. Records the member in `roster.tsv` and tags the pane with its identity — **before** launching the agent, so a member whose agent then fails to start still shows up in `roster.sh verify` instead of becoming an untracked pane.
+3. Starts the pane on a plain shell and types the agent command into it, so the pane survives the agent exiting and you can still read the failure.
+4. Waits for the agent to replace the shell as the pane's foreground command, then for the pane to stop redrawing. Both matter: an agent is the foreground command seconds before its TUI will accept a keystroke.
+5. Sends one bootstrap line invoking this skill and naming the role, the name, the mailbox and both pane IDs, retrying until the pane confirms it took the message:
 
    ```
-   /paired-review-loop You are the WORKER. Session dir: /tmp/prl-demo. Your pane is %180 and the thinker's pane is %174. Read /tmp/prl-demo/thinker.out and begin.
+   /paired-review-loop You are the TESTER named 'tester-1'. Session dir: /tmp/prl-demo. Your inbox is /tmp/prl-demo/members/tester-1/in and you report in /tmp/prl-demo/members/tester-1/out. Your pane is %181 and the thinker's pane is %174. Read /tmp/prl-demo/members/tester-1/in and begin.
    ```
 
    The prefix follows the CLI: `/` for Claude and AGY, `$` for Codex, inferred from `--cmd` and overridable with `--skill-prefix`.
-5. Writes `session.env` and prints the worker's pane ID.
+6. Prints the member's pane ID.
 
-The worker's CLI must already have this skill installed — `./install.sh` from the repo root does that for Claude, AGY and Codex.
+Every member's CLI must already have this skill installed — `./install.sh` from the repo root does that for Claude, AGY and Codex.
 
 ## When it does not work
 
@@ -123,3 +171,5 @@ The worker's CLI must already have this skill installed — `./install.sh` from 
 - **Spawn times out.** The agent never came up within 60s. The pane ID is printed anyway; go look at it. Raise the limit with `PRL_SPAWN_TIMEOUT` on a cold start.
 - **A message is sitting unsent in the counterpart's input box.** Its TUI was still starting when the text was typed: the terminal echoed the characters, but the program had not begun reading, so the Enter went nowhere. The scripts handle this by pressing Enter until the pane reacts, and by letting a freshly spawned agent finish drawing before typing at it. If you hit it anyway, press Enter in the pane and raise `PRL_BOOTSTRAP_ATTEMPTS` (default 30) or `PRL_SEND_DELAY` (default 0.3s, the gap between the text and the Enter).
 - **Characters arrive but do something strange.** A TUI in vim mode reads keystrokes as editing commands unless it is in insert mode. Check the pane's mode before blaming the transport.
+- **Exit 14, or a member answering someone else's task.** The roster and the panes disagree. `roster.sh verify` shows which; `roster.sh sync` rebuilds the file from the panes. Do not send anything else until they agree.
+- **A member went quiet for a round.** `roster.sh verify` distinguishes the cases that look identical from outside: `EXITED` (agent gone, pane at a shell), `GONE` (pane closed), `MISMATCH` (someone else is there now), `OK` (it is simply still working).

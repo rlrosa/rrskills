@@ -56,6 +56,42 @@ prl_capture() {
   tmux capture-pane -p -t "$1" 2>/dev/null
 }
 
+# Stamp a pane with the session it serves and the member it is running, so the
+# pane itself carries its identity.
+#
+# This is the half of the index that cannot go stale: roster.tsv says which pane
+# a member should be in, the pane says which member it actually is, and a send
+# only goes ahead when the two agree. It also means a lost roster can be rebuilt
+# by scanning panes rather than guessing.
+# The agent command is tagged too, not just the name and role, so a roster
+# rebuilt from panes comes back complete rather than approximate:
+# pane_current_command would only report `claude`, losing the model and flags.
+prl_tag_pane() {
+  local pane="$1" session="$2" member="$3" role="$4" agent_command="$5"
+  tmux set-option -p -t "$pane" @prl_session "$session" 2>/dev/null || return 1
+  tmux set-option -p -t "$pane" @prl_member "$member" 2>/dev/null || return 1
+  tmux set-option -p -t "$pane" @prl_role "$role" 2>/dev/null || return 1
+  tmux set-option -p -t "$pane" @prl_cmd "$agent_command" 2>/dev/null || return 1
+}
+
+# Print a pane's tag value, or nothing when the pane is untagged or gone.
+prl_pane_tag() {
+  tmux display-message -p -t "$1" "#{@$2}" 2>/dev/null
+}
+
+# List every tagged pane belonging to a session, as `pane<TAB>member<TAB>role`.
+#
+# Reads the whole server rather than one window: members can be moved between
+# windows and sessions by hand, and their pane IDs follow them.
+prl_list_tagged_panes() {
+  local session="$1"
+  tmux list-panes -a \
+    -F '#{pane_id}	#{@prl_session}	#{@prl_member}	#{@prl_role}	#{@prl_cmd}	#{pane_current_path}' \
+    2>/dev/null \
+    | awk -F'\t' -v session="$session" \
+      '$2 == session && $3 != "" { print $1 "\t" $3 "\t" $4 "\t" $5 "\t" $6 }'
+}
+
 # Type one line into a pane and submit it, without checking it arrived. Use it
 # for panes running a shell, which buffers whatever is typed at it and runs the
 # line once it starts reading. Agent TUIs drop early input instead, so send to

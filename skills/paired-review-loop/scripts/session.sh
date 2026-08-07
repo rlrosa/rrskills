@@ -2,21 +2,25 @@
 # session.sh — create and maintain a paired-review-loop session directory.
 #
 #   session.sh init <session-dir>
-#       Create <session-dir>/evidence/ and a session.env holding what both
-#       agents need to find each other.
+#       Create the session tree and a session.env holding what the team needs
+#       to find each other:
+#           session.env             the thinker's pane
+#           roster.tsv              who is on the team and where
+#           members/<name>/in       thinker -> that member
+#           members/<name>/out      that member -> thinker
+#           members/<name>/evidence raw proof, one file per claim
 #
-#   session.sh register <session-dir> <thinker|worker>
-#       Record the calling pane as that role's pane, read from $TMUX_PANE.
-#       Use this when the two agents were started by hand; spawn-worker.sh
-#       registers both panes on its own.
+#   session.sh register <session-dir> thinker
+#       Record the calling pane as the thinker's, read from $TMUX_PANE. Use
+#       this when the thinker did not spawn the team itself. Members register
+#       through roster.sh, which also tags their pane.
 #
 #   session.sh get <session-dir> <key>
-#       Print one value, e.g. `session.sh get /tmp/prl-demo PRL_WORKER_PANE`.
+#       Print one value, e.g. `session.sh get /tmp/prl-demo PRL_THINKER_PANE`.
 #       Prints nothing and exits 1 when the key is unset.
 #
 # session.env is plain `KEY='value'` lines, so it can be sourced directly:
-#   PRL_SESSION_DIR, PRL_THINKER_PANE, PRL_WORKER_PANE, PRL_WORKER_CMD,
-#   PRL_WORKER_CWD
+#   PRL_SESSION_DIR, PRL_THINKER_PANE
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -37,15 +41,16 @@ VERB="${1:-}"
 case "$VERB" in
   init)
     SESSION="${2:?usage: session.sh init <session-dir>}"
-    mkdir -p "$SESSION/evidence"
+    mkdir -p "$SESSION/members"
     SESSION=$(cd "$SESSION" && pwd)
     prl_set_key "$SESSION/session.env" PRL_SESSION_DIR "$SESSION"
+    "$SCRIPT_DIR/roster.sh" init "$SESSION" > /dev/null
     echo "$SESSION"
     ;;
 
   register)
-    SESSION="${2:?usage: session.sh register <session-dir> <thinker|worker>}"
-    ROLE="${3:?usage: session.sh register <session-dir> <thinker|worker>}"
+    SESSION="${2:?usage: session.sh register <session-dir> thinker}"
+    ROLE="${3:?usage: session.sh register <session-dir> thinker}"
     if [ ! -d "$SESSION" ]; then
       echo "session: no such session dir: $SESSION" >&2
       exit 1
@@ -54,16 +59,13 @@ case "$VERB" in
       echo "session: \$TMUX_PANE is unset, so this process is not in a tmux pane" >&2
       exit 10
     fi
-    case "$ROLE" in
-      thinker) KEY=PRL_THINKER_PANE ;;
-      worker) KEY=PRL_WORKER_PANE ;;
-      *)
-        echo "session: role must be 'thinker' or 'worker', got '$ROLE'" >&2
-        exit 2
-        ;;
-    esac
-    prl_set_key "$SESSION/session.env" "$KEY" "$TMUX_PANE"
-    echo "$KEY=$TMUX_PANE"
+    if [ "$ROLE" != "thinker" ]; then
+      echo "session: only the thinker registers here; members use 'roster.sh add'" >&2
+      echo "session: e.g. roster.sh add $SESSION <name> <role> \$TMUX_PANE \$PWD '<agent>'" >&2
+      exit 2
+    fi
+    prl_set_key "$SESSION/session.env" PRL_THINKER_PANE "$TMUX_PANE"
+    echo "PRL_THINKER_PANE=$TMUX_PANE"
     ;;
 
   get)

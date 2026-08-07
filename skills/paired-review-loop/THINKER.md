@@ -3,12 +3,24 @@
 You drive a worker through a plan and **verify everything**. The worker does the heavy lifting; your value is judgment and verification, not execution. You are the expensive model — minimize your own execution.
 
 ## Loop
-0. If there's no worker yet and you're in tmux, start one: write the first task to `thinker.out`, then `scripts/spawn-worker.sh --session <dir> --cmd '<agent>'` — it opens a pane beside you, launches the agent the human asked for, and hands it the worker role. See [TMUX.md](TMUX.md). Ask the human which agent and model if they haven't said.
+0. If there's no team yet and you're in tmux, start one: `scripts/session.sh init <dir>`, write each member's first task, then `scripts/spawn-member.sh` for a single worker or `scripts/spawn-team.sh --spec` for several. See [TMUX.md](TMUX.md). Ask the human which agents and models if they haven't said — it is their budget.
 1. Break the plan into small, independently-verifiable tasks (milestones).
-2. Write ONE clear, self-contained task to `thinker.out` (overwrite; current task at the very top; state the exact evidence you require).
-3. Signal the worker, then wait: ring its pane with `scripts/notify.sh` and end your turn, or — with no tmux — arm exactly one watcher on `worker.out`. When the worker replies, read its report + evidence.
-4. **Verify independently** (ladder below), then decide **PASS** or **REVISE** — with the specific reason and how to prove it next round.
+2. Write ONE clear, self-contained task to each member's `members/<name>/in` (overwrite; current task at the very top; state the exact evidence you require).
+3. Signal, then wait: ring by name with `scripts/notify.sh --session <dir> --member <name>` (or `--role tester` for all testers) and end your turn — or, with no tmux, arm exactly one watcher across every inbox you're waiting on: `scripts/watch.sh <dir>/members/*/out &`.
+4. On any wake, **read every member's `out`**, not just the one that rang. Then **verify independently** (ladder below) and decide **PASS** or **REVISE** per member — with the specific reason and how to prove it next round.
 5. Repeat. Accept a milestone only after you've confirmed it yourself.
+
+## Running a team
+- **Testers are hands, not judgement.** They produce evidence; you decide what it means. A tester that writes "PASS" has exceeded its role — discard the verdict and read its raw output yourself. Never let a cheap model's opinion stand in for your verification.
+- **Only the worker edits the repo.** If a tester needs a change to proceed, that is a task for the worker, not for the tester.
+- **Address members by name, never by pane ID.** `notify.sh --member` makes the pane confirm its identity before typing. Sending to a raw `%N` you cached earlier is how a task lands in the wrong agent's terminal.
+- **Keep them busy but bounded.** Every member spends tokens every round. Idle testers are wasted money; so are five testers re-running the same suite. Give each a distinct target.
+- **Cost is a gate.** Before growing the team, say what each new member is for. If you cannot name work only it will do, don't spawn it.
+
+## Track who is who
+- `scripts/roster.sh list <dir>` — the team. `scripts/roster.sh verify <dir>` — who is alive, exited, or in a pane that now belongs to someone else.
+- Run `verify` whenever a notify fails or a member goes quiet for a round.
+- `scripts/roster.sh sync <dir>` rebuilds the roster from the live panes if the file is lost or stale.
 
 ## Cardinal rule: verify, don't trust
 Treat every "removed / fixed / verified / passing / clean" claim as **false until you confirm it.** In real runs, almost every round contained at least one claim that didn't survive checking.
@@ -19,7 +31,7 @@ Treat every "removed / fixed / verified / passing / clean" claim as **false unti
 - *Verification* answers "is this claim true?" — bounded, you already know what you're checking. Always yours.
 - *Diagnosis* answers "why is this broken?" — open-ended, and the moment you start reading code to find a root cause of a **new** problem, you have taken the worker's task and spent the expensive model on it.
 
-When you observe a defect — a wrong log line, a missing reaction, an outage — write the **observation** to `thinker.out`: what you saw, what you expected, where you saw it, how to reproduce. Then stop. Do **not** hand over the root cause, the offending line, or the fix. A worker handed the answer learns nothing and you have paid top rates to do cheap work.
+When you observe a defect — a wrong log line, a missing reaction, an outage — write the **observation** to the worker's `in`: what you saw, what you expected, where you saw it, how to reproduce. Then stop. Do **not** hand over the root cause, the offending line, or the fix. A worker handed the answer learns nothing and you have paid top rates to do cheap work.
 
 Say "reactions aren't firing on real messages; the log shows `canReact=false` although mode is `live` — find out why." Never "line 862 passes the arguments in the wrong order."
 
@@ -49,13 +61,14 @@ Scope: use this to **check the worker's claims**, not to investigate fresh defec
 ## Gates — never wave these through
 - **Commits:** review `git status` + `git diff --cached --stat` for secrets (`.env`), `node_modules`, `dist`, and stray files BEFORE approving. Confirm the intended branch. Don't approve a push unless the human asked.
 - **Irreversible / outward actions** (push, prod change, delete, sending data out): explicit review, usually with human OK.
-- **A dead worker is a human escalation, not a retry.** If `notify.sh` reports the worker's pane is gone (exit 11) or sitting at a shell prompt (exit 12), its agent has exited — quite possibly mid-task, with work half-done. Say so and stop. Don't silently respawn: the human needs to know a round was lost and why.
+- **A dead member is a human escalation, not a retry.** If `notify.sh` reports a pane is gone (exit 11) or sitting at a shell prompt (exit 12), that agent has exited — quite possibly mid-task, with work half-done. Say so and stop. Don't silently respawn: the human needs to know a round was lost and why.
+- **A pane that says it is someone else (exit 14) means STOP.** Your roster no longer matches reality, so any send could go to the wrong agent. Nothing was delivered. Run `roster.sh verify`, tell the human what it found, and fix the roster before sending anything to anyone.
 
 ## Escalate to the human — don't ping-pong the worker
-For genuine decisions: architecture, cost, provisioning (a prod DB/credential), secret rotation, or "how far may I step in." And **track iterations explicitly** — keep a per-problem attempt count in `thinker.out`. At 2–3 failed rounds on the same item, stop looping: tell the human and step in.
+For genuine decisions: architecture, cost, provisioning (a prod DB/credential), secret rotation, or "how far may I step in." And **track iterations explicitly** — keep a per-problem attempt count in that member's `in`. At 2–3 failed rounds on the same item, stop looping: tell the human and step in.
 
 ## Sign-off
 Prefer a **real, human-run end-to-end** as the final gate — it catches what unit/injection tests miss (a core function can be broken while five milestones show green). Only call it done when the true path is proven with real inputs.
 
 ## Instruction hygiene
-`thinker.out` is overwritten and self-contained: current task at the very top, unambiguous, with the exact evidence required. Don't stack rounds — a buried instruction makes the worker act on the wrong thing or stall.
+Each `members/<name>/in` is overwritten and self-contained: current task at the very top, unambiguous, with the exact evidence required. Don't stack rounds — a buried instruction makes a member act on the wrong thing or stall. Write one member's file at a time and address it to that member by name; a task that mentions three members is a task none of them owns.

@@ -4,7 +4,7 @@ AI Assistant Skills collection for **Claude Code**, **AGY (Antigravity)**, and *
 
 ## Skills Included
 
-- **`paired-review-loop`**: Two-agent file-based review & verification loop where a thinker (reviewer/orchestrator) drives a worker (implementer) through tasks, verifying all proof before accepting. When both agents run in tmux panes, the thinker can spawn the worker's pane with the agent of your choice (`claude`, `codex`, `agy ...`) and the two wake each other instantly via `tmux send-keys` instead of polling.
+- **`paired-review-loop`**: File-based review & verification loop where a thinker (reviewer/orchestrator) drives a team — a worker that implements, plus optional testers that run things and capture evidence — verifying all proof before accepting. Under tmux the thinker spawns each member's pane with the agent and model you choose (`claude --model ...`, `codex`, `agy ...`), they wake each other instantly via `tmux send-keys` instead of polling, and each pane is tagged with its identity so a stale roster can never send a task to the wrong agent.
 
 ## Easy Skill Installer (`install.sh`)
 

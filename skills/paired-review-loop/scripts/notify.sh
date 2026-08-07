@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 # notify.sh <pane-id> <message>
+# notify.sh --session <dir> --member <name> <message>
+# notify.sh --session <dir> --role <role> <message>
 #
-# Rings the doorbell on the counterpart agent's tmux pane: types <message> into
-# it and presses Enter, so that agent wakes up and acts at once instead of
-# waiting for watch.sh to notice a file changed.
+# Rings the doorbell on a teammate's tmux pane: types <message> into it and
+# presses Enter, so that agent wakes up and acts at once instead of waiting for
+# watch.sh to notice a file changed.
+#
+# Prefer --member over a raw pane ID. It looks the pane up in the roster and
+# then makes the pane confirm it really is that member before typing anything,
+# which is what stops a task landing in the wrong agent's terminal after panes
+# have been closed, reopened or reused.
+#
+# --role rings every member holding that role, e.g. all the testers. It reports
+# per member and exits non-zero if any of them could not be reached.
 #
 # <message> is a POINTER, never content. Keep it to one line naming the file to
-# read — "prl: thinker.out updated, read /tmp/prl-demo/thinker.out". Task text,
-# verdicts and evidence belong in the session files, which stay the record of
-# what was asked and what was proven.
+# read — "prl: your inbox was updated, read /tmp/prl-demo/members/worker/in".
+# Task text, verdicts and evidence belong in the session files, which stay the
+# record of what was asked and what was proven.
 #
 # Start the message with "prl:" rather than "/", "#" or "!". Agent TUIs treat
 # those first characters as mode switches (slash command, memory, shell) and
@@ -16,19 +26,59 @@
 #
 # Exit codes, so a caller can tell what to do next:
 #   0   delivered  - the pane reacted to the keystrokes
-#   10  no tmux    - fall back to watch.sh on the counterpart's file
-#   11  no pane    - the counterpart's pane is gone; tell the human
+#   10  no tmux    - fall back to watch.sh on the teammate's file
+#   11  no pane    - the teammate's pane is gone; tell the human
 #   12  shell      - the pane is at a shell prompt, so its agent has exited.
 #                    Nothing was sent. Tell the human; do not retry.
 #   13  unconfirmed- keys were sent but the pane did not visibly react
+#   14  wrong pane - the pane says it is someone else. The roster is stale;
+#                    nothing was sent. Run 'roster.sh sync' and look before
+#                    trying again.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 
-PANE="${1:?usage: notify.sh <pane-id> <message>}"
-MSG="${2:?usage: notify.sh <pane-id> <message>}"
+usage() {
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+  exit "${1:-0}"
+}
+
+SESSION=""
+MEMBER=""
+ROLE=""
+PANE=""
+MSG=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session) SESSION="$2"; shift 2 ;;
+    --member) MEMBER="$2"; shift 2 ;;
+    --role) ROLE="$2"; shift 2 ;;
+    -h | --help) usage 0 ;;
+    --*)
+      echo "notify: unknown option '$1'" >&2
+      usage 2
+      ;;
+    *)
+      if [ -z "$MEMBER" ] && [ -z "$ROLE" ] && [ -z "$PANE" ] && [ -z "$MSG" ]; then
+        PANE="$1"
+      else
+        MSG="$1"
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$MEMBER" ] || [ -n "$ROLE" ]; then
+  # In the addressed forms the lone positional is the message, not a pane.
+  [ -z "$MSG" ] && MSG="$PANE" && PANE=""
+  [ -n "$SESSION" ] || { echo "notify: --session is required with --member/--role" >&2; exit 2; }
+fi
+
+[ -n "$MSG" ] || usage 2
 
 # A newline inside the text would submit the message halfway through and leave
 # the rest sitting in the input box, so reject it rather than half-send it.
@@ -44,32 +94,70 @@ if ! prl_tmux_available; then
   exit 10
 fi
 
-if ! prl_pane_exists "$PANE"; then
-  echo "notify: pane $PANE does not exist" >&2
-  exit 11
+# Ring one pane. <label> names the recipient in messages, so a broadcast reads
+# as "tester-2" rather than "%183".
+ring_pane() {
+  local pane="$1" label="$2" before after
+
+  if ! prl_pane_exists "$pane"; then
+    echo "notify: $label: pane $pane does not exist" >&2
+    return 11
+  fi
+
+  if prl_pane_is_shell "$pane"; then
+    echo "notify: $label: pane $pane is at a shell prompt ($(prl_pane_command "$pane")) - its agent has exited. Nothing sent." >&2
+    return 12
+  fi
+
+  before=$(prl_capture "$pane")
+
+  if ! prl_send_verified "$pane" "$MSG"; then
+    echo "notify: $label: pane $pane did not accept the message; it may still be starting up" >&2
+    return 13
+  fi
+
+  sleep "$PRL_REACT_DELAY"
+  after=$(prl_capture "$pane")
+
+  # A changed pane proves the keystrokes landed and the agent is processing
+  # them. It does not prove the agent understood the nudge — only the reply on
+  # the teammate's own file proves that.
+  if [ "$before" = "$after" ]; then
+    echo "notify: $label: sent to $pane but the pane did not react" >&2
+    return 13
+  fi
+
+  echo "DELIVERED $label $pane"
+}
+
+# Look a member up and make its pane agree it is that member before sending.
+ring_member() {
+  local name="$1" pane resolve_status
+  pane=$("$SCRIPT_DIR/roster.sh" resolve "$SESSION" "$name")
+  resolve_status=$?
+  if [ "$resolve_status" -ne 0 ]; then
+    return "$resolve_status"
+  fi
+  ring_pane "$pane" "$name"
+}
+
+if [ -n "$ROLE" ]; then
+  members=$("$SCRIPT_DIR/roster.sh" list "$SESSION" "$ROLE" | cut -f1)
+  if [ -z "$members" ]; then
+    echo "notify: no members with role '$ROLE' in $SESSION" >&2
+    exit 1
+  fi
+  worst=0
+  while read -r name; do
+    [ -z "$name" ] && continue
+    ring_member "$name" || worst=$?
+  done <<< "$members"
+  exit "$worst"
+elif [ -n "$MEMBER" ]; then
+  ring_member "$MEMBER"
+  exit $?
+else
+  [ -n "$PANE" ] || usage 2
+  ring_pane "$PANE" "$PANE"
+  exit $?
 fi
-
-if prl_pane_is_shell "$PANE"; then
-  echo "notify: pane $PANE is at a shell prompt ($(prl_pane_command "$PANE")) - its agent has exited. Nothing sent." >&2
-  exit 12
-fi
-
-before=$(prl_capture "$PANE")
-
-if ! prl_send_verified "$PANE" "$MSG"; then
-  echo "notify: pane $PANE did not accept the message; it may still be starting up" >&2
-  exit 13
-fi
-
-sleep "$PRL_REACT_DELAY"
-after=$(prl_capture "$PANE")
-
-# A changed pane proves the keystrokes landed and the agent is processing them.
-# It does not prove the agent understood the nudge — only the reply on the
-# counterpart's file proves that.
-if [ "$before" = "$after" ]; then
-  echo "notify: sent to $PANE but the pane did not react" >&2
-  exit 13
-fi
-
-echo "DELIVERED $PANE"
