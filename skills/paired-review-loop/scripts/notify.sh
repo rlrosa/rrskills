@@ -25,7 +25,10 @@
 # would act on the nudge instead of reading it.
 #
 # Exit codes, so a caller can tell what to do next:
-#   0   delivered  - the pane reacted to the keystrokes
+#   0   delivered  - the pane reacted to the keystrokes, or was mid-turn and the
+#                    message was queued into it unconfirmed (reported as QUEUED;
+#                    a busy TUI shows no sign of accepting input, so its own
+#                    wait deadline is what covers a nudge that never took)
 #   10  no tmux    - fall back to watch.sh on the teammate's file
 #   11  no pane    - the teammate's pane is gone; tell the human
 #   12  shell      - the pane is at a shell prompt, so its agent has exited.
@@ -111,9 +114,18 @@ ring_pane() {
 
   before=$(prl_capture "$pane")
 
-  if ! prl_send_verified "$pane" "$MSG"; then
+  prl_send_verified "$pane" "$MSG"
+  local send_status=$?
+  if [ "$send_status" -eq 1 ]; then
     echo "notify: $label: pane $pane did not accept the message; it may still be starting up" >&2
     return 13
+  fi
+  if [ "$send_status" -eq 2 ]; then
+    # The keystrokes went out, but this pane cannot show whether they took. Say
+    # which of the two reasons it was, so a pane that is merely busy is not
+    # confused with one that is too narrow to talk to at all.
+    echo "QUEUED $label $pane (${PRL_UNVERIFIED_REASON:-unverified}; delivery not confirmed)"
+    return 0
   fi
 
   sleep "$PRL_REACT_DELAY"

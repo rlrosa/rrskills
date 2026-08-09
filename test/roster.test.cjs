@@ -1,4 +1,4 @@
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
@@ -9,6 +9,8 @@ const roster = path.join(scriptsDir, 'roster.sh');
 const notify = path.join(scriptsDir, 'notify.sh');
 const watch = path.join(scriptsDir, 'watch.sh');
 const spawnTeam = path.join(scriptsDir, 'spawn-team.sh');
+const status = path.join(scriptsDir, 'status.sh');
+const spawnMember = path.join(scriptsDir, 'spawn-member.sh');
 
 function hasTmux() {
   try {
@@ -39,17 +41,19 @@ function tmux(args, opts = {}) {
   }).trim();
 }
 
+// spawnSync rather than execFileSync: these scripts warn on stderr while still
+// succeeding, and execFileSync only hands back stderr when the command fails.
 function runScript(script, args, env = {}) {
-  try {
-    const stdout = execFileSync(script, args, {
-      encoding: 'utf8',
-      env: { ...testEnv, ...env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return { code: 0, stdout, stderr: '' };
-  } catch (err) {
-    return { code: err.status, stdout: err.stdout || '', stderr: err.stderr || '' };
-  }
+  const result = spawnSync(script, args, {
+    encoding: 'utf8',
+    env: { ...testEnv, ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return {
+    code: result.status,
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+  };
 }
 
 function paneTag(pane, tag) {
@@ -263,6 +267,133 @@ try {
     watched.includes(`CHANGED ${outFiles[2]}`),
     `watch should report the file that actually changed, got: ${watched}`
   );
+
+  console.log('Running test 10: watch.sh gives up at its deadline...');
+  // An unbounded wait is what turns a lost nudge into a permanent stall, so the
+  // deadline firing is the property that matters most here.
+  const idleFile = path.join(tmpDir, 'nobody-writes-here');
+  fs.writeFileSync(idleFile, 'initial\n');
+  const timedOut = runScript(watch, [idleFile, '--interval', '1', '--timeout', '3']);
+  assert.strictEqual(timedOut.code, 3, 'a deadline passing with no change should exit 3');
+  assert(timedOut.stdout.includes('TIMEOUT'), 'it should say it timed out, not that something changed');
+
+  // A change inside the window still wins; the deadline must not mask it.
+  const beatsDeadline = execFileSync(
+    'bash',
+    ['-c', '( sleep 2; printf changed > "$1" ) & exec "$2" "$1" --interval 1 --timeout 20',
+      'bash', idleFile, watch],
+    { encoding: 'utf8', timeout: 30000 }
+  );
+  assert(beatsDeadline.includes('CHANGED'), 'a change inside the window should still report CHANGED');
+
+  // The escape hatch has to keep working, or anyone relying on it silently
+  // starts getting woken every 900s.
+  let stillBlocking = false;
+  try {
+    execFileSync(watch, [idleFile, '--interval', '1', '--timeout', '0'], { timeout: 4000, stdio: 'ignore' });
+  } catch (err) {
+    stillBlocking = err.code === 'ETIMEDOUT';
+  }
+  assert(stillBlocking, '--timeout 0 should still wait indefinitely');
+
+  console.log('Running test 11: status.sh says whose move it is...');
+  const turnDir = path.join(tmpDir, 'prl-turns');
+  runScript(roster, ['init', turnDir]);
+  const turnPane = tmux(['split-window', '-d', '-t', thinkerPane, '-P', '-F', '#{pane_id}']);
+  tmux(['send-keys', '-t', turnPane, '-l', 'cat']);
+  tmux(['send-keys', '-t', turnPane, 'Enter']);
+  execFileSync('sleep', ['1']);
+  runScript(roster, ['add', turnDir, 'worker', 'worker', turnPane, tmpDir, 'cat']);
+
+  const memberInbox = path.join(turnDir, 'members', 'worker', 'in');
+  const memberOutbox = path.join(turnDir, 'members', 'worker', 'out');
+
+  // Nothing written at all: the thinker owes the first task.
+  let report = runScript(status, [turnDir]);
+  assert(/worker\s+thinker/.test(report.stdout), `expected thinker to owe first, got:\n${report.stdout}`);
+
+  // Task written, no reply: the member owes.
+  fs.writeFileSync(memberInbox, 'TASK\n');
+  report = runScript(status, [turnDir]);
+  assert(/worker\s+worker/.test(report.stdout), `expected the member to owe, got:\n${report.stdout}`);
+
+  // Reply written after the task: the thinker owes again. The sleep is real —
+  // mtime has one-second granularity, so a same-second reply is indistinguishable.
+  execFileSync('sleep', ['1']);
+  fs.writeFileSync(memberOutbox, 'REPORT\n');
+  report = runScript(status, [turnDir]);
+  assert(/worker\s+thinker/.test(report.stdout), `expected the thinker to owe again, got:\n${report.stdout}`);
+
+  // Fresh moves are fine; only an old one needs attention.
+  assert.strictEqual(
+    runScript(status, [turnDir], { PRL_STALL_AFTER: '600' }).code,
+    0,
+    'a move seconds old should not be flagged'
+  );
+  assert.strictEqual(
+    runScript(status, [turnDir], { PRL_STALL_AFTER: '0' }).code,
+    1,
+    'a move older than the threshold should be flagged'
+  );
+
+  console.log('Running test 12: a pane too narrow to verify says so, and still sends...');
+  // A one-column pane is where this bit hardest: the agent in it stayed alive
+  // and looked reachable while every nudge failed with "may still be starting
+  // up", which sent the diagnosis in entirely the wrong direction.
+  // Build it in a window of its own. Resizing a pane inside the shared test
+  // window is silently clamped by whatever else is laid out there, which would
+  // leave this "narrow" pane comfortably wide and the test proving nothing.
+  const narrowHost = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
+  const narrowPane = tmux(['split-window', '-h', '-d', '-t', narrowHost, '-P', '-F', '#{pane_id}']);
+  tmux(['send-keys', '-t', narrowPane, '-l', 'cat']);
+  tmux(['send-keys', '-t', narrowPane, 'Enter']);
+  execFileSync('sleep', ['1']);
+  tmux(['resize-pane', '-t', narrowPane, '-x', '10']);
+  execFileSync('sleep', ['1']);
+  const narrowWidth = Number(tmux(['display-message', '-p', '-t', narrowPane, '#{pane_width}']));
+  assert(narrowWidth < 40, `the pane must actually be narrow for this test, got ${narrowWidth}`);
+
+  const narrowSend = runScript(notify, [narrowPane, 'prl: narrow probe']);
+  assert.strictEqual(narrowSend.code, 0, 'a narrow pane should still be sent to, not abandoned');
+  assert(
+    /columns wide/.test(narrowSend.stdout),
+    `it must name the width as the reason it cannot confirm, got: ${narrowSend.stdout}`
+  );
+  assert(
+    !/starting up/.test(narrowSend.stdout + narrowSend.stderr),
+    'it must not blame startup for a width problem'
+  );
+  tmux(['kill-window', '-t', narrowHost]);
+
+  console.log('Running test 13: a split that would strand an agent opens a window instead...');
+  // The cause of the one-column pane was a split, so the fix has to be refusing
+  // the split rather than only reporting the symptom afterwards.
+  const squeezeDir = path.join(tmpDir, 'prl-squeeze');
+  // Again in its own window, so the pane really is as cramped as the test says.
+  const squeezeHost = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
+  tmux(['split-window', '-h', '-d', '-t', squeezeHost]);
+  tmux(['resize-pane', '-t', squeezeHost, '-x', '60']);
+  execFileSync('sleep', ['1']);
+  const cramped = Number(tmux(['display-message', '-p', '-t', squeezeHost, '#{pane_width}']));
+  assert(cramped < 80, `the pane must be too cramped to halve, got ${cramped}`);
+
+  const squeezed = runScript(
+    spawnMember,
+    ['--session', squeezeDir, '--name', 'worker', '--cmd', 'cat', '--no-bootstrap'],
+    { TMUX_PANE: squeezeHost }
+  );
+  assert.strictEqual(squeezed.code, 0, `spawn should still succeed: ${squeezed.stderr}`);
+  assert(/under the \d+ needed/.test(squeezed.stderr), `it should explain the refusal: ${squeezed.stderr}`);
+
+  const squeezedPane = squeezed.stdout.trim();
+  const squeezedWidth = Number(tmux(['display-message', '-p', '-t', squeezedPane, '#{pane_width}']));
+  assert(squeezedWidth >= 40, `the member must land somewhere usable, got ${squeezedWidth} columns`);
+  assert.notStrictEqual(
+    tmux(['display-message', '-p', '-t', squeezedPane, '#{window_id}']),
+    tmux(['display-message', '-p', '-t', squeezeHost, '#{window_id}']),
+    'it should have gone to its own window rather than splitting a cramped one'
+  );
+  tmux(['kill-window', '-t', squeezeHost]);
 
   console.log('All roster tests passed successfully!');
 } catch (err) {

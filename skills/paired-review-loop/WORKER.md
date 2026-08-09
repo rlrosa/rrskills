@@ -8,7 +8,9 @@ You are the only member that edits the repo. Testers, if the thinker started any
 1. Read the current task at the **top** of `<session>/members/<you>/in`.
 2. Do exactly that task — no more, no less.
 3. For every claim, write `<session>/members/<you>/evidence/NN-topic.txt` = the **exact command + its full, unedited output + exit code**.
-4. Write `<session>/members/<you>/out` (format below) — always the file first, so the thinker never wakes to a stale report. Then signal and wait: in tmux, ring the thinker's pane with `scripts/notify.sh` and end your turn; otherwise arm exactly one watcher on your `in`. See [TMUX.md](TMUX.md).
+4. Write `<session>/members/<you>/out` (format below) — always the file first, so the thinker never wakes to a stale report. Then signal **and** arm a deadline: ring the thinker's pane with `scripts/notify.sh`, then `scripts/watch.sh <session>/members/<you>/in --timeout 900 &`. Ringing is not waiting; a nudge that fails leaves you asleep with nothing to wake you. See [TMUX.md](TMUX.md).
+
+If that deadline fires with no new task, ring the thinker once more. If the next one fires too, append a line to your `out` saying you are blocked and stop — put the state on disk rather than sitting on it.
 
 ## Evidence rules (non-negotiable)
 - **Raw, not summarized.** Paste the real command and its complete output. A prose summary is not proof.

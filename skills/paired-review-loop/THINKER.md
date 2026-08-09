@@ -6,8 +6,9 @@ You drive a worker through a plan and **verify everything**. The worker does the
 0. If there's no team yet and you're in tmux, start one: `scripts/session.sh init <dir>`, write each member's first task, then `scripts/spawn-member.sh` for a single worker or `scripts/spawn-team.sh --spec` for several. See [TMUX.md](TMUX.md). Ask the human which agents and models if they haven't said — it is their budget.
 1. Break the plan into small, independently-verifiable tasks (milestones).
 2. Write ONE clear, self-contained task to each member's `members/<name>/in` (overwrite; current task at the very top; state the exact evidence you require).
-3. Signal, then wait: ring by name with `scripts/notify.sh --session <dir> --member <name>` (or `--role tester` for all testers) and end your turn — or, with no tmux, arm exactly one watcher across every inbox you're waiting on: `scripts/watch.sh <dir>/members/*/out &`.
-4. On any wake, **read every member's `out`**, not just the one that rang. Then **verify independently** (ladder below) and decide **PASS** or **REVISE** per member — with the specific reason and how to prove it next round.
+3. Signal, then wait — **both**: ring by name with `scripts/notify.sh --session <dir> --member <name>` (or `--role tester` for all testers), then arm exactly one deadline across everything you're waiting on: `scripts/watch.sh <dir>/members/*/out --timeout 900 &`. Ringing someone is not waiting for them; a nudge that fails or gets ignored strands you with nothing armed.
+4. On any wake, kill your watcher, then **read every member's `out`**, not just the one that rang. Then **verify independently** (ladder below) and decide **PASS** or **REVISE** per member — with the specific reason and how to prove it next round.
+   - **If the watcher exited 3, nothing arrived.** Run `scripts/status.sh <dir>` before concluding anything. It will tell you whether a member owes a reply or *you* owe the next task — and the second case is a stall of your own making, which you cannot see by thinking about it.
 5. Repeat. Accept a milestone only after you've confirmed it yourself.
 
 ## Running a team
@@ -16,6 +17,15 @@ You drive a worker through a plan and **verify everything**. The worker does the
 - **Address members by name, never by pane ID.** `notify.sh --member` makes the pane confirm its identity before typing. Sending to a raw `%N` you cached earlier is how a task lands in the wrong agent's terminal.
 - **Keep them busy but bounded.** Every member spends tokens every round. Idle testers are wasted money; so are five testers re-running the same suite. Give each a distinct target.
 - **Cost is a gate.** Before growing the team, say what each new member is for. If you cannot name work only it will do, don't spawn it.
+
+## When a deadline fires and nothing has changed
+Work the facts, in this order, and stop guessing:
+
+1. `scripts/status.sh <dir>` — whose move is it, and for how long.
+2. **If you owe the next task, write it.** The most common stall is the thinker waiting for a reply it has already received.
+3. **If a member owes and its pane is `OK`, re-ring it** and re-arm. It may simply be slow, or the first nudge may have been lost.
+4. **Twice is enough.** After two unanswered nudges for the same round, stop nudging and tell the human: which member, which task, how long. A third nudge has never been the thing that fixed it.
+5. **`WAITING`, `EXITED`, `GONE` or `MISMATCH` is not a nudge problem** — that member is blocked on a prompt, dead, or replaced. Escalate immediately; re-ringing cannot help.
 
 ## Track who is who
 - `scripts/roster.sh list <dir>` — the team. `scripts/roster.sh verify <dir>` — who is alive, exited, or in a pane that now belongs to someone else.

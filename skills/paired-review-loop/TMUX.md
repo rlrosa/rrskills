@@ -98,17 +98,41 @@ A delivered nudge proves the keystrokes landed, not that the recipient understoo
 
 ## Waiting
 
-**With tmux, arm nothing.** Finish your turn and stop. The counterpart's nudge re-invokes you when there is something to read. There is no polling and no 60s floor on the round trip.
-
-**Without tmux**, or after any non-zero exit above, fall back to the watcher, backgrounded, exactly one at a time. It takes several files and returns on the first to change, which is what a thinker waiting on a whole team needs:
+**Ring, then arm a deadline. Always both.**
 
 ```
-scripts/watch.sh /tmp/prl-demo/members/*/out --interval 60 &
+scripts/notify.sh --session /tmp/prl-demo --member worker 'prl: your inbox was updated - read /tmp/prl-demo/members/worker/in'
+scripts/watch.sh /tmp/prl-demo/members/*/out --interval 60 --timeout 900 &
 ```
+
+The doorbell is the fast path — it wakes the recipient in seconds instead of on the next poll. It is **not** a delivery guarantee, so it cannot be the only thing that can wake you. The watcher bounds the failure: exit `0` when a file changed, exit `3` when the deadline passed with nothing happening.
+
+The watcher takes several files and returns on the first to change, which is what a thinker waiting on a whole team needs. Keep exactly one armed, and kill it when you wake before arming the next.
 
 Waking is still not reading: whichever file fired, the thinker reads **every** member's `out`, because others may have reported while it was busy.
 
-You can also run both — nudge *and* arm a long watcher (say 300s) — as a backstop against a nudge that was delivered but silently ignored. Kill the watcher when you wake.
+### The four ways a loop stalls
+
+Every one of them ends with both sides believing the other owes a reply. Notice that a watcher with no deadline only helps with the first two — in the last two *nothing changes*, so a change-triggered wake never fires.
+
+| | What happened | What breaks it |
+| --- | --- | --- |
+| Someone rang, and the ring failed | `notify` exit 13, or the message queued and was never acted on | The recipient's deadline |
+| Someone wrote but never rang | The nudge was skipped entirely | The recipient's deadline |
+| Someone believes they handed off but wrote nothing | No file changed at all | The other side's deadline + `status.sh` |
+| The recipient woke, read, and decided there was nothing to do | Both now think it is the other's move | Either side's deadline + `status.sh` |
+
+**On an exit-3 wake, do not assume you are still waiting.** Run `scripts/status.sh <session>`. It compares each member's `in` against its `out` and tells you who actually owes what:
+
+```
+member       owes       since  pane      note
+worker       thinker    3m     OK        replied; you owe the next task
+tester-1     tester-1   22m    WAITING   frozen with its task unanswered
+```
+
+`in` newer than `out` means that member owes a reply; `out` newer than `in` means the thinker owes the next task. It exits `1` when something has been owed longer than `PRL_STALL_AFTER` (default 600s) or a pane is not `OK`.
+
+Then act on what it says: re-ring whoever owes, or — if it says *you* owe the next task — write it. After two unanswered nudges for the same round, stop nudging and tell the human which member is stuck and for how long.
 
 ## Spawning one member
 

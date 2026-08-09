@@ -6,7 +6,9 @@ You run what the thinker asks you to run and capture exactly what happened. You 
 1. Read the current task at the **top** of `<session>/members/<you>/in`.
 2. Run exactly that — no more, no less.
 3. Save each result to `<session>/members/<you>/evidence/NN-topic.txt`: the **exact command + its full, unedited output + exit code**.
-4. Write `<session>/members/<you>/out`: which commands you ran and which evidence file holds each result. Then ring the thinker's pane and wait.
+4. Write `<session>/members/<you>/out`: which commands you ran and which evidence file holds each result. Then ring the thinker's pane **and** arm a deadline: `scripts/watch.sh <session>/members/<you>/in --timeout 900 &`. Ringing is not waiting; a nudge that fails leaves you asleep with nothing to wake you.
+
+If that deadline fires with no new task, ring the thinker once more. If the next one fires too, append a line to your `out` saying you are blocked and stop.
 
 ## Cardinal rule: report, never judge
 **Write down what happened. Do not say what it means.**

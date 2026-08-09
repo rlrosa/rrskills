@@ -119,6 +119,31 @@ prl_send_line() {
   tmux send-keys -t "$pane" Enter
 }
 
+# Seconds to watch a pane to decide whether it is mid-turn.
+PRL_BUSY_SAMPLE="${PRL_BUSY_SAMPLE:-1.2}"
+
+# Below this width an agent TUI has no room to lay out an input box, so nothing
+# typed into it can be confirmed and the pane should not be created that narrow
+# in the first place. Observed live: a thinker's pane squeezed to 1 column by
+# repeated splits stayed perfectly alive, and every nudge to it failed.
+PRL_MIN_PANE_WIDTH="${PRL_MIN_PANE_WIDTH:-40}"
+
+# Print a pane's width in columns, or 0 if it has gone.
+prl_pane_width() {
+  tmux display-message -p -t "$1" '#{pane_width}' 2>/dev/null || echo 0
+}
+
+# True when the pane is redrawing, which for an agent TUI means it is working.
+# A working agent ticks an elapsed-time counter every second; an idle one is
+# perfectly still.
+prl_pane_is_busy() {
+  local pane="$1" first second
+  first=$(prl_capture "$pane")
+  sleep "$PRL_BUSY_SAMPLE"
+  second=$(prl_capture "$pane")
+  [ "$first" != "$second" ]
+}
+
 # Block until a pane stops redrawing, meaning a program that just started has
 # finished painting its first screen. Always returns 0; a pane that never
 # settles is left for the caller's own checks to deal with.
@@ -152,10 +177,40 @@ prl_wait_ready() {
 # Each check reads the cursor first and the screen only as a fallback. The
 # cursor is the more trustworthy of the two: it moves only for real characters,
 # and it returns to the start of the box when a message is actually submitted.
+# Returns 0 when the send was confirmed, 2 when it was sent but could not be
+# confirmed, and 1 when it definitely did not get through.
 prl_send_verified() {
   local pane="$1" text="$2" attempts="${3:-20}"
   local probe count_before count_after attempt enter_press
   local cursor_before cursor_typed screen_before_enter
+
+  # Two states make confirmation impossible, and in both of them retrying does
+  # active harm: the C-u that clears a half-typed message erases a perfectly
+  # good queued one instead. Observed live, a nudge to a busy thinker was
+  # retried twenty times and destroyed rather than delivered.
+  #
+  # So when the pane cannot answer for itself, send once, say plainly that it is
+  # unconfirmed, and let the recipient's own wait deadline be the backstop.
+  # That is what deadlines are for.
+  local width
+  width=$(prl_pane_width "$pane")
+  PRL_UNVERIFIED_REASON=""
+  if [ "$width" -lt "$PRL_MIN_PANE_WIDTH" ]; then
+    # Too narrow to lay out an input box, so neither the cursor nor the text
+    # can show the message arriving.
+    PRL_UNVERIFIED_REASON="pane is only $width columns wide"
+  elif prl_pane_is_busy "$pane"; then
+    # A working TUI stops redrawing its input box and parks the cursor
+    # elsewhere, so every check below would report "nothing arrived".
+    PRL_UNVERIFIED_REASON="pane is mid-turn"
+  fi
+  if [ -n "$PRL_UNVERIFIED_REASON" ]; then
+    tmux send-keys -t "$pane" -l -- "$text" || return 1
+    sleep "$PRL_SEND_DELAY"
+    tmux send-keys -t "$pane" Enter || return 1
+    return 2
+  fi
+
   # Compare a short leading slice rather than the whole message. The TUI wraps a
   # long line across rows, so the full string never appears verbatim on screen.
   probe=${text:0:20}

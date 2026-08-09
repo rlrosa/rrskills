@@ -1,4 +1,4 @@
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -43,21 +43,19 @@ function tmux(args, opts = {}) {
 let testEnv;
 let socketPath;
 
+// spawnSync rather than execFileSync: these scripts warn on stderr while still
+// succeeding, and execFileSync only hands back stderr when the command fails.
 function runScript(script, args, env = {}) {
-  try {
-    const stdout = execFileSync(script, args, {
-      encoding: 'utf8',
-      env: { ...testEnv, ...env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return { code: 0, stdout, stderr: '' };
-  } catch (err) {
-    return {
-      code: err.status,
-      stdout: err.stdout || '',
-      stderr: err.stderr || '',
-    };
-  }
+  const result = spawnSync(script, args, {
+    encoding: 'utf8',
+    env: { ...testEnv, ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return {
+    code: result.status,
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+  };
 }
 
 function paneCommand(pane) {
@@ -228,14 +226,27 @@ try {
   // move the original pane too — a configured pane border takes a row from
   // both — so a position measured beforehand is about a layout that no longer
   // exists.
+  //
+  // Each case gets a window of its own, wide enough that spawn-member's
+  // minimum-width guard has no reason to divert the member to a new window.
+  // Sharing the crowded test window would leave a pane too cramped to halve,
+  // and the orientation being tested here would never be exercised.
   const spawnAndCompare = (dirName, layout) => {
     const sessionDir = path.join(tmpDir, dirName);
-    const pane = runScript(spawnMember, [
-      '--session', sessionDir, '--name', 'worker', '--cmd', 'cat', '--layout', layout, '--no-bootstrap',
-    ]).stdout.trim();
+    const host = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
+    const pane = runScript(
+      spawnMember,
+      ['--session', sessionDir, '--name', 'worker', '--cmd', 'cat', '--layout', layout, '--no-bootstrap'],
+      { TMUX_PANE: host }
+    ).stdout.trim();
     assert(/^%\d+$/.test(pane), `--layout ${layout} should print a pane id, got '${pane}'`);
-    const geometry = { worker: paneGeometry(pane), thinker: paneGeometry(thinkerPane) };
-    tmux(['kill-pane', '-t', pane]);
+    assert.strictEqual(
+      tmux(['display-message', '-p', '-t', pane, '#{window_id}']),
+      tmux(['display-message', '-p', '-t', host, '#{window_id}']),
+      `--layout ${layout} should have split the window, not opened a new one`
+    );
+    const geometry = { worker: paneGeometry(pane), thinker: paneGeometry(host) };
+    tmux(['kill-window', '-t', host]);
     return geometry;
   };
 

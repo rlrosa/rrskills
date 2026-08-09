@@ -44,12 +44,16 @@ Every member owns its own directory and writes nowhere else in the session.
 1. **Exchange files are overwritten each round and self-contained.** The top of the file IS the current task/verdict — never append history and bury the current ask; buried instructions stall the loop.
 2. **Evidence = the exact command + its complete, unedited output + exit code**, saved to your own `evidence/NN-*.txt`. A prose summary is never proof. If something can't run, write `NOT RUN: <reason>` — never fake it.
 3. **Green unit tests ≠ a working system.** Integration / a real human-run end-to-end is where regressions hide; require it before sign-off.
-4. **Write your file, then signal.** Two transports, and the signal is always a pointer — never the content:
-   - **In tmux:** ring the recipient with `scripts/notify.sh --session <dir> --member <name> 'prl: …'`, then end your turn and arm nothing. Address by **member name, not pane ID** — that makes the pane prove who it is first. Its exit code tells you if it landed. See [TMUX.md](TMUX.md).
-   - **Otherwise:** block on the counterpart's file with `scripts/watch.sh <file>… [--interval 60]`, backgrounded. It exits when any watched file changes and your harness re-invokes you. Keep **exactly one** watcher armed.
+4. **Write your file, then signal.** The signal is always a pointer — never the content. In tmux, ring the recipient with `scripts/notify.sh --session <dir> --member <name> 'prl: …'`. Address by **member name, not pane ID** — that makes the pane prove who it is first. Its exit code tells you if it landed. See [TMUX.md](TMUX.md). The files are the record either way, so a human relaying between chats that share the filesystem still works.
+5. **Never end a turn waiting without an armed deadline.** Ringing someone is not waiting for them — a doorbell that fails, or that lands and gets ignored, leaves you asleep forever. So arm a backstop as well, always, on both sides:
 
-   Either way the files are the record, so a human relaying between chats that share the filesystem still works.
-5. **Waking is not reading.** Whoever wakes you, the thinker reads **every** member's `out` — several can report while it is busy, and answering only the last one to ring silently drops the rest.
+   ```
+   scripts/watch.sh <dir>/members/*/out --interval 60 --timeout 900 &
+   ```
+
+   It exits `0` when a file changed and `3` when the deadline passed with nothing happening. Keep **exactly one** watcher armed; kill it when you wake, act, then arm the next one.
+6. **On a timeout wake, check whose move it is — don't assume.** Run `scripts/status.sh <dir>`. It reads the mailbox timestamps and tells you, per member, whether that member owes a reply or *you* owe the next task. The stall this prevents is both sides believing the other owes something, and you cannot detect that from memory: your memory is the part that is wrong.
+7. **Waking is not reading.** Whoever wakes you, the thinker reads **every** member's `out` — several can report while it is busy, and answering only the last one to ring silently drops the rest.
 
 ## Quick start
 - **Thinker, one worker:** `scripts/session.sh init /tmp/prl-demo`; write the task to `/tmp/prl-demo/members/worker/in`; then
@@ -63,4 +67,4 @@ Every member owns its own directory and writes nowhere else in the session.
   tester-1    tester   codex
   tester-2    tester   agy --dangerously-skip-permissions
   ```
-- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then ring the thinker — or `scripts/watch.sh <session>/members/<you>/in &` if there is no tmux.
+- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; ring the thinker; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 900 &` so a lost nudge cannot strand you.

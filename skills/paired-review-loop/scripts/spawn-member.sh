@@ -175,6 +175,23 @@ split_off_member_pane() {
 # one.
 MEMBER_PANE=""
 if [ -n "$SPLIT_FLAG" ]; then
+  # Refuse a side-by-side split that would leave either pane too narrow to talk
+  # to. tmux happily produces a one-column pane, and an agent stranded in one
+  # stays alive and looks reachable while every nudge to it silently fails —
+  # which is exactly how a thinker ends up unreachable in its own session.
+  if [ "$SPLIT_FLAG" = "-h" ]; then
+    available_width=$(prl_pane_width "$INTO_PANE")
+    new_pane_width=$((available_width * SIZE_PERCENT / 100))
+    remaining_width=$((available_width - new_pane_width))
+    if [ "$new_pane_width" -lt "$PRL_MIN_PANE_WIDTH" ] || [ "$remaining_width" -lt "$PRL_MIN_PANE_WIDTH" ]; then
+      echo "spawn-member: splitting $INTO_PANE ($available_width cols) would leave panes of" \
+        "$remaining_width and $new_pane_width columns, under the $PRL_MIN_PANE_WIDTH needed" \
+        "to reach an agent - opening a new window instead" >&2
+      SPLIT_FLAG=""
+    fi
+  fi
+fi
+if [ -n "$SPLIT_FLAG" ]; then
   MEMBER_PANE=$(split_off_member_pane) || MEMBER_PANE=""
   if [ -z "$MEMBER_PANE" ]; then
     echo "spawn-member: could not split the window (too small?), opening a new window instead" >&2
