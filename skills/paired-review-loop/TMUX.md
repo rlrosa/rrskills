@@ -163,7 +163,25 @@ tester-2    tester   agy --dangerously-skip-permissions
 
 Everything after the role is the agent command, so it may contain flags and spaces. `-` as the spec reads it from stdin.
 
-The first member gets a new window named `prl-<session>`; the rest are split into it and the window is re-tiled after each one, so nobody ends up in a sliver. Each spawn waits for its own agent to become interactive, so later members start up while earlier ones are still being bootstrapped — three stand-in members came up in under 10s.
+The team lands beside the thinker, in its window:
+
+```
+┌─ window ───────────┬──────────────┐
+│                    │  worker      │
+│                    ├──────────────┤
+│   thinker  %174    │  tester-1    │
+│                    ├──────────────┤
+│                    │  tester-2    │
+└────────────────────┴──────────────┘
+```
+
+**The thinker's pane is split exactly once, ever.** The first member takes half of it side by side; every member after that subdivides the members' half instead, and they are evened up after each addition. Halving the thinker's pane per member is what once reduced it to a single column — still alive, still looking reachable, and unable to receive a single nudge.
+
+Each spawn waits for its own agent to become interactive, so later members start up while earlier ones are still being bootstrapped — three stand-in members came up in under 10s.
+
+Members stack in whichever order kept them evenly sized, not in spawn order, so each pane's title is set to its member name. Add `#{pane_title}` to your `pane-border-format` to see who is who at a glance.
+
+If the window is genuinely too cramped to divide — under 40 columns across or 10 rows down — that member gets its own window rather than a sliver, and says so.
 
 Past **6 members** it warns: tiled panes stop being readable, and every member spends tokens every round. It is a warning, not a refusal — your terminal, your budget.
 

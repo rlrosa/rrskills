@@ -174,30 +174,55 @@ try {
   );
   tmux(['set-option', '-p', '-t', paneB, '@prl_member', 'tester-1']);
 
-  console.log('Running test 6: spawn-team builds a tagged, tiled team...');
+  console.log('Running test 6: spawn-team keeps the team beside the thinker...');
   const teamDir = path.join(tmpDir, 'prl-team');
   const spec = path.join(tmpDir, 'team.txt');
   fs.writeFileSync(
     spec,
     '# name      role     agent\nworker      worker   cat\ntester-1    tester   cat\ntester-2    tester   cat\n'
   );
-  const team = runScript(spawnTeam, ['--session', teamDir, '--spec', spec, '--cwd', tmpDir]);
+  // A window of its own, wide enough that the minimum-width guard has no reason
+  // to divert anyone. In the crowded shared window the thinker's pane is too
+  // narrow to halve, so the layout under test would never be exercised.
+  const teamHost = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
+  const hostWindow = tmux(['display-message', '-p', '-t', teamHost, '#{window_id}']);
+  const thinkerWidthBefore = Number(tmux(['display-message', '-p', '-t', teamHost, '#{pane_width}']));
+
+  const team = runScript(
+    spawnTeam,
+    ['--session', teamDir, '--spec', spec, '--cwd', tmpDir],
+    { TMUX_PANE: teamHost }
+  );
   assert.strictEqual(team.code, 0, `spawn-team should succeed: ${team.stderr}`);
 
   const spawned = team.stdout.trim().split('\n').map((line) => line.split('\t'));
   assert.strictEqual(spawned.length, 3, 'every member in the spec should be spawned');
-  const teamWindows = new Set();
   for (const [name, pane] of spawned) {
     assert.strictEqual(paneTag(pane, 'prl_member'), name, `${name}'s pane should be tagged`);
     assert.strictEqual(paneTag(pane, 'prl_session'), teamDir, `${name} should be tagged for this session`);
-    teamWindows.add(tmux(['display-message', '-p', '-t', pane, '#{window_id}']));
+    assert.strictEqual(
+      tmux(['display-message', '-p', '-t', pane, '#{window_id}']),
+      hostWindow,
+      `${name} should sit beside the thinker, not scatter to its own window`
+    );
   }
-  assert.strictEqual(teamWindows.size, 1, 'the team should be gathered into one window');
-  assert.strictEqual(
-    tmux(['display-message', '-p', '-t', spawned[0][1], '#{window_name}']),
-    'prl-team',
-    'the window should be named after the session, without doubling the prefix'
+
+  // The property this layout exists for: the thinker's pane is split once for
+  // the first member and never touched again, however many members follow.
+  // Halving it per member is what reduced one to a single column.
+  const thinkerWidthAfter = Number(tmux(['display-message', '-p', '-t', teamHost, '#{pane_width}']));
+  assert(
+    thinkerWidthAfter >= Math.floor(thinkerWidthBefore / 2) - 2,
+    `the thinker kept ${thinkerWidthAfter} of ${thinkerWidthBefore} columns; it should lose only the one split`
   );
+  const memberColumns = spawned.map(([, pane]) =>
+    Number(tmux(['display-message', '-p', '-t', pane, '#{pane_left}'])));
+  assert.strictEqual(
+    new Set(memberColumns).size,
+    1,
+    'members should stack in one column beside the thinker, not subdivide sideways'
+  );
+
   assert.strictEqual(
     runScript(roster, ['list', teamDir]).stdout.trim().split('\n').length,
     3,

@@ -115,31 +115,21 @@ fi
 # Each spawn already waits for its own agent to become interactive, which is the
 # bulk of the time. Members later in the list are therefore starting up while
 # earlier ones are still being bootstrapped.
-FIRST_PANE=""
 for index in "${!NAMES[@]}"; do
   name="${NAMES[$index]}"
-  spawn_args=(
-    --session "$SESSION"
-    --name "$name"
-    --role "${ROLES[$index]}"
-    --cmd "${COMMANDS[$index]}"
-    --cwd "$CWD"
-  )
-  if [ -z "$FIRST_PANE" ]; then
-    spawn_args+=(--layout window --window-name "$WINDOW_NAME")
-  else
-    spawn_args+=(--into "$FIRST_PANE" --layout below)
-  fi
-
-  if ! pane=$("$SCRIPT_DIR/spawn-member.sh" "${spawn_args[@]}" "${BOOTSTRAP_ARGS[@]+"${BOOTSTRAP_ARGS[@]}"}"); then
+  # No placement flags: spawn-member puts the first member beside the thinker
+  # and stacks the rest inside that half, keeping them even as it goes. Tiling
+  # the window instead would rope the thinker's pane into the arrangement.
+  if ! pane=$("$SCRIPT_DIR/spawn-member.sh" \
+    --session "$SESSION" \
+    --name "$name" \
+    --role "${ROLES[$index]}" \
+    --cmd "${COMMANDS[$index]}" \
+    --cwd "$CWD" \
+    "${BOOTSTRAP_ARGS[@]+"${BOOTSTRAP_ARGS[@]}"}"); then
     echo "spawn-team: '$name' failed to start; the members already up are left running" >&2
     echo "spawn-team: check them with 'roster.sh verify $SESSION'" >&2
     exit 1
   fi
-  [ -n "$FIRST_PANE" ] || FIRST_PANE="$pane"
-
-  # Re-tile after every split. Splitting the same pane repeatedly would
-  # otherwise halve it each time, leaving the first member in a sliver.
-  tmux select-layout -t "$pane" tiled > /dev/null 2>&1 || true
   printf '%s\t%s\n' "$name" "$pane"
 done

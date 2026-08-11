@@ -83,6 +83,10 @@ prl_tag_pane() {
   tmux set-option -p -t "$pane" @prl_member "$member" 2>/dev/null || return 1
   tmux set-option -p -t "$pane" @prl_role "$role" 2>/dev/null || return 1
   tmux set-option -p -t "$pane" @prl_cmd "$agent_command" 2>/dev/null || return 1
+  # Name the pane too. Members are stacked in whichever order kept them evenly
+  # sized rather than in spawn order, so the title is how a human tells them
+  # apart. Add #{pane_title} to pane-border-format to see it on the border.
+  tmux select-pane -t "$pane" -T "$member" 2>/dev/null || true
 }
 
 # Print a pane's tag value, or nothing when the pane is untagged or gone.
@@ -128,9 +132,65 @@ PRL_BUSY_SAMPLE="${PRL_BUSY_SAMPLE:-1.2}"
 # repeated splits stayed perfectly alive, and every nudge to it failed.
 PRL_MIN_PANE_WIDTH="${PRL_MIN_PANE_WIDTH:-40}"
 
+# Below this height an agent TUI cannot show a transcript and an input box at
+# once, so stacking members any tighter stops being useful.
+PRL_MIN_PANE_HEIGHT="${PRL_MIN_PANE_HEIGHT:-10}"
+
 # Print a pane's width in columns, or 0 if it has gone.
 prl_pane_width() {
   tmux display-message -p -t "$1" '#{pane_width}' 2>/dev/null || echo 0
+}
+
+# Print a pane's height in rows, or 0 if it has gone.
+prl_pane_height() {
+  tmux display-message -p -t "$1" '#{pane_height}' 2>/dev/null || echo 0
+}
+
+# Print this session's member panes that share a window with <pane>, tallest
+# first, as `height<TAB>pane`.
+#
+# The set of member panes is what the team's half of the window is made of, so
+# reading it back from the pane tags is enough to place the next member without
+# recording a separate "area" anywhere. A roster that goes missing does not take
+# the layout with it.
+prl_member_panes_by_height() {
+  local session="$1" window="$2" pane height pane_window
+  while IFS=$'\t' read -r pane _member _role _agent _cwd; do
+    [ -z "$pane" ] && continue
+    pane_window=$(tmux display-message -p -t "$pane" '#{window_id}' 2>/dev/null)
+    [ "$pane_window" = "$window" ] || continue
+    height=$(prl_pane_height "$pane")
+    printf '%s\t%s\n' "$height" "$pane"
+  done < <(prl_list_tagged_panes "$session") | sort -rn
+}
+
+# Give this session's member panes in one window equal heights.
+#
+# Splitting the tallest member each round keeps the team roughly even but drifts
+# — three members end up half, quarter, quarter — so square them up afterwards.
+# tmux only balances whole windows, and doing that here would drag the thinker's
+# pane into the arrangement too.
+prl_balance_member_panes() {
+  local session="$1" window="$2" panes=() total=0 count target pane height index
+  # Work down the stack in screen order, not by size. Resizing a stacked pane
+  # moves the boundary it shares with the one below, so going top to bottom lets
+  # each resize settle instead of undoing the previous one.
+  while IFS=$'\t' read -r _top height pane; do
+    [ -z "$pane" ] && continue
+    panes+=("$pane")
+    total=$((total + height))
+  done < <(prl_member_panes_by_height "$session" "$window" | while IFS=$'\t' read -r height pane; do
+    printf '%s\t%s\t%s\n' "$(tmux display-message -p -t "$pane" '#{pane_top}' 2>/dev/null)" "$height" "$pane"
+  done | sort -n)
+
+  count=${#panes[@]}
+  [ "$count" -lt 2 ] && return 0
+  target=$((total / count))
+  [ "$target" -lt 1 ] && return 0
+  # The last pane is left alone: it absorbs whatever rounding leaves over.
+  for ((index = 0; index < count - 1; index++)); do
+    tmux resize-pane -t "${panes[$index]}" -y "$target" 2>/dev/null || true
+  done
 }
 
 # True when the pane is redrawing, which for an agent TUI means it is working.

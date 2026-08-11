@@ -22,7 +22,10 @@
 #   --into <pane-id>    Pane to split. Defaults to this one ($TMUX_PANE).
 #                       spawn-team.sh uses it to gather the whole team into one
 #                       window.
-#   --layout <where>    Where to put the pane. Named after the result rather
+#   --layout <where>    Override the default placement. By default the first
+#                       member splits the thinker's pane side by side and every
+#                       later member stacks inside that half, so the thinker is
+#                       only ever split once. Named after the result rather
 #                       than tmux's -h/-v, which read backwards to most people.
 #                       A split falls back to a new window when the window is
 #                       too small to divide.
@@ -64,7 +67,9 @@ MEMBER_ROLE="worker"
 AGENT_CMD=""
 CWD="$PWD"
 INTO_PANE=""
+INTO_PANE_GIVEN=""
 LAYOUT="right"
+LAYOUT_GIVEN=""
 WINDOW_NAME=""
 SIZE_PERCENT=50
 SKILL_PREFIX=""
@@ -86,8 +91,8 @@ while [ $# -gt 0 ]; do
     --role) MEMBER_ROLE="$2"; shift 2 ;;
     --cmd) AGENT_CMD="$2"; shift 2 ;;
     --cwd) CWD="$2"; shift 2 ;;
-    --into) INTO_PANE="$2"; shift 2 ;;
-    --layout) LAYOUT="$2"; shift 2 ;;
+    --into) INTO_PANE="$2"; INTO_PANE_GIVEN=yes; shift 2 ;;
+    --layout) LAYOUT="$2"; LAYOUT_GIVEN=yes; shift 2 ;;
     --window-name) WINDOW_NAME="$2"; shift 2 ;;
     --size) SIZE_PERCENT="$2"; shift 2 ;;
     --skill-prefix) SKILL_PREFIX="$2"; shift 2 ;;
@@ -169,26 +174,49 @@ split_off_member_pane() {
     -p "$SIZE_PERCENT" -P -F '#{pane_id}' 2>/dev/null
 }
 
-# Open the pane running a plain shell rather than the agent itself. If the agent
-# exits or crashes, the pane stays put with its output on screen instead of
-# vanishing, which is the difference between a diagnosable failure and a silent
-# one.
+# Decide where this member goes, unless the caller said explicitly.
+#
+# The thinker's pane is split exactly once, ever: the first member takes half of
+# it, and every member after that subdivides the members' half instead. Halving
+# the thinker's pane per member is what shrank one to a single column, at which
+# point it was still alive and every nudge to it failed.
+THINKER_WINDOW=$(tmux display-message -p -t "$THINKER_PANE" '#{window_id}' 2>/dev/null)
+if [ -z "$LAYOUT_GIVEN" ] && [ -z "$INTO_PANE_GIVEN" ]; then
+  tallest_member=$(prl_member_panes_by_height "$SESSION" "$THINKER_WINDOW" | head -1 | cut -f2)
+  if [ -n "$tallest_member" ]; then
+    # Split the roomiest teammate, then even everyone up afterwards.
+    INTO_PANE="$tallest_member"
+    SPLIT_FLAG="-v"
+    SIZE_PERCENT=50
+  fi
+fi
+
 MEMBER_PANE=""
-if [ -n "$SPLIT_FLAG" ]; then
+if [ "$SPLIT_FLAG" = "-h" ]; then
   # Refuse a side-by-side split that would leave either pane too narrow to talk
   # to. tmux happily produces a one-column pane, and an agent stranded in one
   # stays alive and looks reachable while every nudge to it silently fails —
   # which is exactly how a thinker ends up unreachable in its own session.
-  if [ "$SPLIT_FLAG" = "-h" ]; then
-    available_width=$(prl_pane_width "$INTO_PANE")
-    new_pane_width=$((available_width * SIZE_PERCENT / 100))
-    remaining_width=$((available_width - new_pane_width))
-    if [ "$new_pane_width" -lt "$PRL_MIN_PANE_WIDTH" ] || [ "$remaining_width" -lt "$PRL_MIN_PANE_WIDTH" ]; then
-      echo "spawn-member: splitting $INTO_PANE ($available_width cols) would leave panes of" \
-        "$remaining_width and $new_pane_width columns, under the $PRL_MIN_PANE_WIDTH needed" \
-        "to reach an agent - opening a new window instead" >&2
-      SPLIT_FLAG=""
-    fi
+  available_width=$(prl_pane_width "$INTO_PANE")
+  new_pane_width=$((available_width * SIZE_PERCENT / 100))
+  remaining_width=$((available_width - new_pane_width))
+  if [ "$new_pane_width" -lt "$PRL_MIN_PANE_WIDTH" ] || [ "$remaining_width" -lt "$PRL_MIN_PANE_WIDTH" ]; then
+    echo "spawn-member: splitting $INTO_PANE ($available_width cols) would leave panes of" \
+      "$remaining_width and $new_pane_width columns, under the $PRL_MIN_PANE_WIDTH needed" \
+      "to reach an agent - opening a new window instead" >&2
+    SPLIT_FLAG=""
+  fi
+elif [ "$SPLIT_FLAG" = "-v" ]; then
+  # Same reasoning downwards: a member squeezed into a few rows has nowhere to
+  # draw an input box, so give the team its own window rather than a sliver.
+  available_height=$(prl_pane_height "$INTO_PANE")
+  new_pane_height=$((available_height * SIZE_PERCENT / 100))
+  remaining_height=$((available_height - new_pane_height))
+  if [ "$new_pane_height" -lt "$PRL_MIN_PANE_HEIGHT" ] || [ "$remaining_height" -lt "$PRL_MIN_PANE_HEIGHT" ]; then
+    echo "spawn-member: stacking under $INTO_PANE ($available_height rows) would leave panes of" \
+      "$remaining_height and $new_pane_height rows, under the $PRL_MIN_PANE_HEIGHT needed" \
+      "for an agent to draw - opening a new window instead" >&2
+    SPLIT_FLAG=""
   fi
 fi
 if [ -n "$SPLIT_FLAG" ]; then
@@ -208,6 +236,8 @@ if [ -z "$MEMBER_PANE" ]; then
     exit 1
   }
 fi
+
+prl_balance_member_panes "$SESSION" "$THINKER_WINDOW"
 
 prl_set_key "$SESSION/session.env" PRL_THINKER_PANE "$THINKER_PANE"
 # Record and tag before launching. If the agent then fails to start, the member
