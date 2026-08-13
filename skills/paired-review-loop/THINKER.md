@@ -9,10 +9,12 @@ You drive a worker through a plan and **verify everything**. The worker does the
 3. Wait on the files — that is the channel. Arm exactly one deadline across every member's report, **quoting the pattern** so the shell leaves it alone:
 
    ```
-   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 900 &
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 900
    ```
 
    Unquoted, on round one, no `out` exists yet, so the shell finds nothing to expand and hands over the literal `*` — a filename that can never appear. Members write their `out` and wait; they do not ring you.
+
+   **Arm it the way your harness tracks background commands** — in Claude Code the Bash tool's `run_in_background: true`, never a trailing `&`. See [WAITING.md](WAITING.md). A watcher started with `&` usually keeps running, which is why this looks like it worked; but nothing is watching it, so nothing will ever give you a turn.
 4. On any wake, kill your watcher, then **read every member's `out`**, not just the one that changed. Then **verify independently** (ladder below) and decide **PASS** or **REVISE** per member — with the specific reason and how to prove it next round.
    - **If the watcher exited 3, nothing arrived.** Run `scripts/status.sh <dir>` before concluding anything. It will tell you whether a member owes a reply or *you* owe the next task — and the second case is a stall of your own making, which you cannot see by thinking about it.
 5. **Check the team is alive before you settle in to wait again.** `scripts/roster.sh verify <dir>` watches each pane for a moment and separates a member that is working from one frozen on an approval prompt, dead, or replaced. This is the one thing you use tmux for.

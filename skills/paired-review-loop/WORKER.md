@@ -11,8 +11,10 @@ You are the only member that edits the repo. Testers, if the thinker started any
 4. Write `<session>/members/<you>/out` (format below). Then arm a deadline and end your turn:
 
    ```
-   scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 900 &
+   scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 900
    ```
+
+   **Arm it the way your harness tracks background commands** — in Claude Code that is the Bash tool's `run_in_background: true`, never a trailing `&`. [WAITING.md](WAITING.md) has the per-agent detail and is worth reading once: getting this wrong leaves you asleep with nothing able to wake you.
 
 ## Writing `out` is how you reply
 **Do not type into the thinker's pane.** `scripts/notify.sh` is the thinker's tool for poking a member that has gone quiet; it is not your outbox. The thinker is watching your `out` file and will see it within seconds.

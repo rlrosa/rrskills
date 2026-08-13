@@ -112,10 +112,10 @@ Write your file, arm a watcher, end your turn.
 
 ```
 # thinker: every member's report. QUOTE the pattern.
-scripts/watch.sh '/tmp/prl-demo/members/*/out' --interval 15 --timeout 900 &
+scripts/watch.sh '/tmp/prl-demo/members/*/out' --interval 15 --timeout 900
 
 # member: your own next task
-scripts/watch.sh /tmp/prl-demo/members/worker/in --interval 15 --timeout 900 &
+scripts/watch.sh /tmp/prl-demo/members/worker/in --interval 15 --timeout 900
 ```
 
 Exit `0` when a file changed, exit `3` when the deadline passed with nothing happening. Keep exactly one armed, and kill it when you wake before arming the next.

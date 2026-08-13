@@ -1,6 +1,6 @@
 ---
 name: paired-review-loop
-description: Run a file-based loop where a "thinker" (reviewer/orchestrator) drives one or more helper agents — a worker that implements, plus optional testers that run things and capture evidence — and independently verifies every claim before accepting it. Use when supervising or driving other agents through multi-step work via files, when acting as the reviewing/orchestrating thinker, or when running as a worker or tester in such a loop. Under tmux the thinker can spawn each member's pane with the agent and model you choose (claude, codex, agy) and everyone wakes each other instantly. Triggers include "drive a worker agent", "thinker/worker", "review loop", "spawn a team of agents in tmux", or verifying another agent's work against real evidence.
+description: Run a file-based loop where a "thinker" (reviewer/orchestrator) drives one or more helper agents — a worker that implements, plus optional testers that run things and capture evidence — and independently verifies every claim before accepting it. Use when supervising or driving other agents through multi-step work via files, when acting as the reviewing/orchestrating thinker, or when running as a worker or tester in such a loop. Members talk only through files; under tmux the thinker can additionally spawn each member's pane with the agent and model you choose (claude, codex, agy) and poke one that has gone quiet. Triggers include "drive a worker agent", "thinker/worker", "review loop", "spawn a team of agents in tmux", or verifying another agent's work against real evidence.
 ---
 
 # paired-review-loop
@@ -20,7 +20,8 @@ The team is whatever you ask for. A single worker is the common case; a worker p
 - **Thinker / reviewer / orchestrator →** read **[THINKER.md](THINKER.md)**.
 - **Worker / implementer →** read **[WORKER.md](WORKER.md)**.
 - **Tester →** read **[TESTER.md](TESTER.md)**.
-- **Running in tmux? →** also read **[TMUX.md](TMUX.md)** — instant wake-up instead of polling, and the thinker can start the whole team itself.
+- **Everyone, before you wait →** read **[WAITING.md](WAITING.md)**. Arming a watcher the wrong way is the most common way a session stalls, and it fails silently — you believe you are waiting and nothing will ever wake you. The right way differs per agent.
+- **Running in tmux? →** also read **[TMUX.md](TMUX.md)** — how the thinker starts the team and reaches a member that has gone quiet.
 
 ## Roles
 - **worker** — implements. **The only member that edits the repo.**
@@ -51,9 +52,9 @@ Every member owns its own directory and writes nowhere else in the session.
 
    ```
    # thinker — every member's report, quote the pattern
-   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 900 &
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 900
    # member — your own next task
-   scripts/watch.sh <dir>/members/<you>/in --interval 15 --timeout 900 &
+   scripts/watch.sh <dir>/members/<you>/in --interval 15 --timeout 900
    ```
 
    It exits `0` when a file changed and `3` when the deadline passed with nothing happening. Keep **exactly one** watcher armed; kill it when you wake, act, then arm the next one.
@@ -72,4 +73,4 @@ Every member owns its own directory and writes nowhere else in the session.
   tester-1    tester   codex
   tester-2    tester   agy --dangerously-skip-permissions
   ```
-- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 900 &` and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.
+- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 900` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.

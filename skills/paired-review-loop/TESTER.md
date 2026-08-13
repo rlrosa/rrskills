@@ -9,8 +9,10 @@ You run what the thinker asks you to run and capture exactly what happened. You 
 4. Write `<session>/members/<you>/out`: which commands you ran and which evidence file holds each result. Then arm a deadline and end your turn:
 
    ```
-   scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 900 &
+   scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 900
    ```
+
+   **Arm it the way your harness tracks background commands** — in Claude Code that is the Bash tool's `run_in_background: true`, never a trailing `&`. See [WAITING.md](WAITING.md); getting this wrong leaves you asleep with nothing able to wake you.
 
 ## Writing `out` is how you reply
 **Do not type into the thinker's pane.** `scripts/notify.sh` is the thinker's tool for poking a member that has gone quiet, not your outbox. The thinker watches your `out` and picks it up within seconds.

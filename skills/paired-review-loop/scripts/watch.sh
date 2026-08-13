@@ -2,9 +2,18 @@
 # watch.sh <file> [file...] [--interval <seconds>] [--timeout <seconds>]
 #
 # Waits for one of the files to change (its mtime increases, or it first
-# appears), or for the deadline to pass. Run it backgrounded so your harness
-# re-invokes you when it exits:
-#   scripts/watch.sh /tmp/prl-demo/members/*/out &
+# appears), or for the deadline to pass.
+#
+# This script does not wake you. It exits, and your HARNESS wakes you because it
+# was watching that process — so it has to be started the way your harness
+# tracks commands. In Claude Code that is the Bash tool's run_in_background
+# parameter. A trailing `&` is NOT that: the shell backgrounds the watcher, your
+# foreground call returns in milliseconds, and nothing is left for the harness to
+# watch, so you are never given a turn. The watcher usually keeps running, which
+# is what makes this look like it worked. See WAITING.md for the per-agent
+# details.
+#
+#   scripts/watch.sh '/tmp/prl-demo/members/*/out' --timeout 900
 #
 #   exit 0   CHANGED <file> <mtime>  - somebody wrote something; go read it.
 #   exit 3   TIMEOUT <seconds>       - nothing happened. Do NOT assume you are
