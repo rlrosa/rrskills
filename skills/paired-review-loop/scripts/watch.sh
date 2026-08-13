@@ -37,7 +37,10 @@
 #     with [.] for the literal dot:   pkill -f 'watch[.]sh /tmp/prl-'
 set -u
 
-INTERVAL=60
+# Files are the channel now, not a fallback, so polling is how a round trip
+# actually completes. A few stat calls cost nothing; waiting a minute to notice
+# a report that is already on disk costs a round.
+INTERVAL=15
 TIMEOUT=900
 FILES=()
 
@@ -84,21 +87,50 @@ mtime_of() {
   stat -c %Y "$1" 2>/dev/null || echo 0
 }
 
-baselines=()
-for file in "${FILES[@]}"; do
-  baselines+=("$(mtime_of "$file")")
-done
+# Expand the arguments afresh on every poll, rather than trusting the shell to
+# have done it once at launch.
+#
+# `watch.sh <dir>/members/*/out` is the idiom a thinker waiting on its team
+# needs, and unquoted it breaks in the exact case that matters: on round one no
+# out file exists, so the shell finds nothing to expand and hands over the
+# pattern verbatim as a filename that can never exist. The watcher then sits
+# there while the worker reports, and only the deadline eventually frees it.
+# Expanding here also means a member who joins mid-wait is picked up, which a
+# one-shot expansion could never do.
+expand_targets() {
+  local pattern
+  shopt -s nullglob
+  for pattern in "${FILES[@]}"; do
+    case "$pattern" in
+      # Globs may legitimately match nothing yet; nullglob drops them until
+      # they do.
+      *[*?[]*) printf '%s\n' $pattern ;;
+      # A plain path is kept whether or not it exists, so its first appearance
+      # still counts as a change.
+      *) printf '%s\n' "$pattern" ;;
+    esac
+  done
+  shopt -u nullglob
+}
+
+declare -A baseline=()
+while read -r target; do
+  [ -z "$target" ] && continue
+  baseline[$target]=$(mtime_of "$target")
+done < <(expand_targets)
 
 deadline=$((SECONDS + TIMEOUT))
 
 while true; do
-  for index in "${!FILES[@]}"; do
-    current=$(mtime_of "${FILES[$index]}")
-    if [ "$current" -gt "${baselines[$index]}" ]; then
-      echo "CHANGED ${FILES[$index]} $current"
+  while read -r target; do
+    [ -z "$target" ] && continue
+    current=$(mtime_of "$target")
+    # A path that was not there when we armed is itself the news.
+    if [ -z "${baseline[$target]+set}" ] || [ "$current" -gt "${baseline[$target]}" ]; then
+      echo "CHANGED $target $current"
       exit 0
     fi
-  done
+  done < <(expand_targets)
   # Check the files once more before giving up, so a write landing during the
   # final sleep is reported as a change rather than as a timeout.
   if [ "$TIMEOUT" -ne 0 ] && [ "$SECONDS" -ge "$deadline" ]; then

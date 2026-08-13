@@ -361,7 +361,42 @@ try {
     'a move older than the threshold should be flagged'
   );
 
-  console.log('Running test 12: a pane too narrow to verify says so, and still sends...');
+  console.log('Running test 12: a glob that matches nothing yet still catches the reply...');
+  // The thinker's idiom is watch.sh '<dir>/members/*/out'. On round one no out
+  // file exists, so the shell has nothing to expand and passes the literal '*'
+  // through as a filename that can never appear. Seen live: the worker reported
+  // and the thinker slept through it until its deadline.
+  const globDir = path.join(tmpDir, 'prl-glob');
+  fs.mkdirSync(path.join(globDir, 'members', 'worker'), { recursive: true });
+  const globPattern = path.join(globDir, 'members', '*', 'out');
+  const lateReply = path.join(globDir, 'members', 'worker', 'out');
+
+  const caughtLateFile = execFileSync(
+    'bash',
+    ['-c', '( sleep 2; printf report > "$1" ) & exec "$2" "$3" --interval 1 --timeout 15',
+      'bash', lateReply, watch, globPattern],
+    { encoding: 'utf8', timeout: 30000 }
+  );
+  assert(
+    caughtLateFile.includes(`CHANGED ${lateReply}`),
+    `a report written after the watcher armed must wake it, got: ${caughtLateFile}`
+  );
+
+  // And a member who joins mid-wait has to be picked up too, which a one-shot
+  // expansion at launch could never do.
+  const joiner = path.join(globDir, 'members', 'tester-1', 'out');
+  const caughtNewMember = execFileSync(
+    'bash',
+    ['-c', 'rm -f "$1"; ( sleep 2; mkdir -p "$(dirname "$4")"; printf hi > "$4" ) & exec "$2" "$3" --interval 1 --timeout 15',
+      'bash', lateReply, watch, globPattern, joiner],
+    { encoding: 'utf8', timeout: 30000 }
+  );
+  assert(
+    caughtNewMember.includes(`CHANGED ${joiner}`),
+    `a member joining mid-wait must wake the thinker, got: ${caughtNewMember}`
+  );
+
+  console.log('Running test 13: a pane too narrow to verify says so, and still sends...');
   // A one-column pane is where this bit hardest: the agent in it stayed alive
   // and looked reachable while every nudge failed with "may still be starting
   // up", which sent the diagnosis in entirely the wrong direction.
@@ -390,7 +425,7 @@ try {
   );
   tmux(['kill-window', '-t', narrowHost]);
 
-  console.log('Running test 13: a split that would strand an agent opens a window instead...');
+  console.log('Running test 14: a split that would strand an agent opens a window instead...');
   // The cause of the one-column pane was a split, so the fix has to be refusing
   // the split rather than only reporting the symptom afterwards.
   const squeezeDir = path.join(tmpDir, 'prl-squeeze');

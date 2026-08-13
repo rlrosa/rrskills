@@ -44,11 +44,16 @@ Every member owns its own directory and writes nowhere else in the session.
 1. **Exchange files are overwritten each round and self-contained.** The top of the file IS the current task/verdict — never append history and bury the current ask; buried instructions stall the loop.
 2. **Evidence = the exact command + its complete, unedited output + exit code**, saved to your own `evidence/NN-*.txt`. A prose summary is never proof. If something can't run, write `NOT RUN: <reason>` — never fake it.
 3. **Green unit tests ≠ a working system.** Integration / a real human-run end-to-end is where regressions hide; require it before sign-off.
-4. **Write your file, then signal.** The signal is always a pointer — never the content. In tmux, ring the recipient with `scripts/notify.sh --session <dir> --member <name> 'prl: …'`. Address by **member name, not pane ID** — that makes the pane prove who it is first. Its exit code tells you if it landed. See [TMUX.md](TMUX.md). The files are the record either way, so a human relaying between chats that share the filesystem still works.
-5. **Never end a turn waiting without an armed deadline.** Ringing someone is not waiting for them — a doorbell that fails, or that lands and gets ignored, leaves you asleep forever. So arm a backstop as well, always, on both sides:
+4. **The files are the channel. Everyone writes a file and waits on a file.** There is no other way to send anything. A message typed into someone's terminal is not part of the conversation and leaves no record.
+   - **Members never type into anyone's pane.** Write your `out`, then wait on your `in`.
+   - **Only the thinker touches tmux**, and only to check a quiet member is alive or to poke one that has stopped answering. See [TMUX.md](TMUX.md).
+5. **Never end a turn waiting without an armed deadline.** Waiting means a watcher is running; believing you are waiting is not waiting.
 
    ```
-   scripts/watch.sh <dir>/members/*/out --interval 60 --timeout 900 &
+   # thinker — every member's report, quote the pattern
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 900 &
+   # member — your own next task
+   scripts/watch.sh <dir>/members/<you>/in --interval 15 --timeout 900 &
    ```
 
    It exits `0` when a file changed and `3` when the deadline passed with nothing happening. Keep **exactly one** watcher armed; kill it when you wake, act, then arm the next one.
@@ -67,4 +72,4 @@ Every member owns its own directory and writes nowhere else in the session.
   tester-1    tester   codex
   tester-2    tester   agy --dangerously-skip-permissions
   ```
-- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; ring the thinker; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 900 &` so a lost nudge cannot strand you.
+- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 900 &` and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.

@@ -1,11 +1,17 @@
-# tmux comms — instant wake-up and worker spawning
+# tmux — spawning the team, and reaching a member that has gone quiet
 
-Optional. Everything here is an accelerator on top of the file protocol, never a replacement for it.
-Without tmux the loop still works exactly as documented in [SKILL.md](SKILL.md); it just wakes on a polling watcher instead of a doorbell.
+Optional, and deliberately narrow. Without tmux the loop works exactly as documented in [SKILL.md](SKILL.md).
 
-**The files stay the record.** The tmux channel carries a pointer — "your file changed, go read it" — and nothing else.
-Task text, verdicts and evidence go in the session files, where they can be re-read, diffed and audited.
-A nudge scrolls off a screen; a file does not.
+**The files are the channel. tmux is not a second one.**
+
+Every message between the thinker and a member is a file: the thinker writes `members/<name>/in`, the member writes `members/<name>/out`, and both sides wait on those files with `scripts/watch.sh`. That is the whole protocol, and it is what makes a session re-readable afterwards.
+
+tmux does two jobs, both of them the **thinker's**:
+
+1. **Starting the team** — `spawn-member.sh` / `spawn-team.sh`.
+2. **Reaching a member that has stopped answering** — `notify.sh`, plus `roster.sh verify` to tell a working member from a stuck one.
+
+**Members never use it.** A member replies by writing its `out` file and waiting on its `in`. Typing at the thinker instead leaves no record, cannot be re-read, and is silently swallowed whenever the thinker happens to be mid-turn.
 
 ## Do you have it?
 
@@ -45,13 +51,17 @@ Every member's pane is also **tagged with its own identity** — `@prl_session`,
 
 `scripts/roster.sh verify <dir>` prints one line per member — `OK`, `GONE`, `EXITED`, `MISMATCH` — plus `UNLISTED` for tagged panes missing from the file. Run it whenever a notify fails or a member goes quiet.
 
-## Ringing the doorbell
+## Poking a member that has gone quiet
+
+For the thinker only, and only after `status.sh` says that member owes a reply and `roster.sh verify` says its pane is alive.
 
 ```
 scripts/notify.sh --session <dir> --member <name> <message>   # preferred
 scripts/notify.sh --session <dir> --role tester <message>     # every tester
 scripts/notify.sh <pane-id> <message>                         # raw, unchecked
 ```
+
+**This is a nudge, never a task.** The message says "look at your inbox" and nothing more; the task itself is already in the file. Anything typed into a terminal is gone the moment it scrolls, and is silently swallowed if that agent is mid-turn.
 
 **Address by name, not by pane ID.** The named forms make the pane prove who it is first; a raw `%N` you cached earlier is how a task ends up in the wrong agent's terminal.
 
@@ -98,16 +108,19 @@ A delivered nudge proves the keystrokes landed, not that the recipient understoo
 
 ## Waiting
 
-**Ring, then arm a deadline. Always both.**
+Write your file, arm a watcher, end your turn.
 
 ```
-scripts/notify.sh --session /tmp/prl-demo --member worker 'prl: your inbox was updated - read /tmp/prl-demo/members/worker/in'
-scripts/watch.sh /tmp/prl-demo/members/*/out --interval 60 --timeout 900 &
+# thinker: every member's report. QUOTE the pattern.
+scripts/watch.sh '/tmp/prl-demo/members/*/out' --interval 15 --timeout 900 &
+
+# member: your own next task
+scripts/watch.sh /tmp/prl-demo/members/worker/in --interval 15 --timeout 900 &
 ```
 
-The doorbell is the fast path — it wakes the recipient in seconds instead of on the next poll. It is **not** a delivery guarantee, so it cannot be the only thing that can wake you. The watcher bounds the failure: exit `0` when a file changed, exit `3` when the deadline passed with nothing happening.
+Exit `0` when a file changed, exit `3` when the deadline passed with nothing happening. Keep exactly one armed, and kill it when you wake before arming the next.
 
-The watcher takes several files and returns on the first to change, which is what a thinker waiting on a whole team needs. Keep exactly one armed, and kill it when you wake before arming the next.
+**Quote the pattern.** On round one no `out` file exists, so an unquoted `*/out` finds nothing to expand and the shell passes the literal `*` through as a filename that can never appear — the watcher then sits there while the worker reports, and only the deadline eventually frees it. `watch.sh` re-expands patterns itself on every poll, which fixes the unquoted case too and means a member who joins mid-wait is picked up as well; quoting just makes it unambiguous.
 
 Waking is still not reading: whichever file fired, the thinker reads **every** member's `out`, because others may have reported while it was busy.
 

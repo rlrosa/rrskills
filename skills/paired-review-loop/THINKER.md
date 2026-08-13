@@ -6,10 +6,25 @@ You drive a worker through a plan and **verify everything**. The worker does the
 0. If there's no team yet and you're in tmux, start one: `scripts/session.sh init <dir>`, write each member's first task, then `scripts/spawn-member.sh` for a single worker or `scripts/spawn-team.sh --spec` for several. See [TMUX.md](TMUX.md). Ask the human which agents and models if they haven't said — it is their budget.
 1. Break the plan into small, independently-verifiable tasks (milestones).
 2. Write ONE clear, self-contained task to each member's `members/<name>/in` (overwrite; current task at the very top; state the exact evidence you require).
-3. Signal, then wait — **both**: ring by name with `scripts/notify.sh --session <dir> --member <name>` (or `--role tester` for all testers), then arm exactly one deadline across everything you're waiting on: `scripts/watch.sh <dir>/members/*/out --timeout 900 &`. Ringing someone is not waiting for them; a nudge that fails or gets ignored strands you with nothing armed.
-4. On any wake, kill your watcher, then **read every member's `out`**, not just the one that rang. Then **verify independently** (ladder below) and decide **PASS** or **REVISE** per member — with the specific reason and how to prove it next round.
+3. Wait on the files — that is the channel. Arm exactly one deadline across every member's report, **quoting the pattern** so the shell leaves it alone:
+
+   ```
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 900 &
+   ```
+
+   Unquoted, on round one, no `out` exists yet, so the shell finds nothing to expand and hands over the literal `*` — a filename that can never appear. Members write their `out` and wait; they do not ring you.
+4. On any wake, kill your watcher, then **read every member's `out`**, not just the one that changed. Then **verify independently** (ladder below) and decide **PASS** or **REVISE** per member — with the specific reason and how to prove it next round.
    - **If the watcher exited 3, nothing arrived.** Run `scripts/status.sh <dir>` before concluding anything. It will tell you whether a member owes a reply or *you* owe the next task — and the second case is a stall of your own making, which you cannot see by thinking about it.
-5. Repeat. Accept a milestone only after you've confirmed it yourself.
+5. **Check the team is alive before you settle in to wait again.** `scripts/roster.sh verify <dir>` watches each pane for a moment and separates a member that is working from one frozen on an approval prompt, dead, or replaced. This is the one thing you use tmux for.
+6. Repeat. Accept a milestone only after you've confirmed it yourself.
+
+## You are the only one who uses tmux
+Members communicate by writing their `out` file, full stop. `scripts/notify.sh` is yours, and it has exactly two uses:
+
+- **Poking a member that has gone quiet**, once `status.sh` says it owes a reply and `roster.sh verify` says its pane is alive and idle.
+- **Nothing else.** Never send a task through it. A task typed into a terminal leaves no record, cannot be re-read, and is silently lost if that agent is mid-turn.
+
+If a member starts replying to you through your pane instead of its `out` file, that is a member that has misread its role — tell it in its `in` to write the file.
 
 ## Running a team
 - **Testers are hands, not judgement.** They produce evidence; you decide what it means. A tester that writes "PASS" has exceeded its role — discard the verdict and read its raw output yourself. Never let a cheap model's opinion stand in for your verification.
@@ -23,7 +38,7 @@ Work the facts, in this order, and stop guessing:
 
 1. `scripts/status.sh <dir>` — whose move is it, and for how long.
 2. **If you owe the next task, write it.** The most common stall is the thinker waiting for a reply it has already received.
-3. **If a member owes and its pane is `OK`, re-ring it** and re-arm. It may simply be slow, or the first nudge may have been lost.
+3. **If a member owes and its pane is `OK`, poke it** with `notify.sh --member <name>` and re-arm. It may simply be slow, or it may have ended its turn without arming a watcher — in which case a poke is the only thing that will restart it.
 4. **Twice is enough.** After two unanswered nudges for the same round, stop nudging and tell the human: which member, which task, how long. A third nudge has never been the thing that fixed it.
 5. **`WAITING`, `EXITED`, `GONE` or `MISMATCH` is not a nudge problem** — that member is blocked on a prompt, dead, or replaced. Escalate immediately; re-ringing cannot help.
 
