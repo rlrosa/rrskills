@@ -31,6 +31,7 @@
 #           EXITED    its agent quit; the pane is back at a shell
 #           GONE      its pane was closed
 #           MISMATCH  its pane now belongs to a different member
+#           AGENT     its pane is running a different agent than recorded
 #           UNLISTED  a pane tagged for this session that the roster forgot
 #       Telling WAITING from OK needs a moment to see whether the pane is
 #       redrawing; set PRL_VERIFY_SAMPLE=0 to skip that and never report it.
@@ -63,6 +64,7 @@ roster_path() {
 }
 
 require_roster() {
+  prl_assert_session_owner "$1" || exit 4
   local file
   file=$(roster_path "$1")
   if [ ! -f "$file" ]; then
@@ -234,6 +236,19 @@ case "$VERB" in
         member_detail[$name]="pane $pane is back at a shell prompt"
         continue
       fi
+      # The roster records what you asked to spawn; the pane knows what is
+      # actually running. A thinker called its worker "codex" for most of a
+      # session while the pane had been running Claude all along — and how much
+      # you trust a member, and how you weigh its pushback, depends on knowing
+      # which it is.
+      running=$(prl_pane_command "$pane")
+      expected=$(basename "${agent%% *}")
+      if [ -n "$running" ] && [ "$running" != "$expected" ]; then
+        member_state[$name]=AGENT
+        member_detail[$name]="roster says '$expected', pane $pane is running '$running'"
+        continue
+      fi
+
       member_state[$name]=LIVE
       member_detail[$name]="$role	$pane	$agent"
       first_screen[$name]=$(prl_capture "$pane")

@@ -9,14 +9,14 @@ You drive a worker through a plan and **verify everything**. The worker does the
 3. Wait on the files — that is the channel. Arm exactly one deadline across every member's report, **quoting the pattern** so the shell leaves it alone:
 
    ```
-   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 900
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540
    ```
 
    Unquoted, on round one, no `out` exists yet, so the shell finds nothing to expand and hands over the literal `*` — a filename that can never appear. Members write their `out` and wait; they do not ring you.
 
-   **Arm it the way your harness tracks background commands** — in Claude Code the Bash tool's `run_in_background: true`, never a trailing `&`. See [WAITING.md](WAITING.md). A watcher started with `&` usually keeps running, which is why this looks like it worked; but nothing is watching it, so nothing will ever give you a turn.
+   **Run it in the FOREGROUND, as your last action of the turn** — the call blocks, then hands control back to you. A harness background task can be reaped, and `&` or `nohup` never wake anyone. Keep `--timeout` under your harness's cap on a foreground call (600s in Claude Code, hence the 540s default). See [WAITING.md](WAITING.md).
 4. On any wake, kill your watcher, then **read every member's `out`**, not just the one that changed. Then **verify independently** (ladder below) and decide **PASS** or **REVISE** per member — with the specific reason and how to prove it next round.
-   - **If the watcher exited 3, nothing arrived.** Run `scripts/status.sh <dir>` before concluding anything. It will tell you whether a member owes a reply or *you* owe the next task — and the second case is a stall of your own making, which you cannot see by thinking about it.
+   - **If the watcher printed `TIMEOUT`, nothing arrived.** Run `scripts/status.sh <dir>` before concluding anything. It will tell you whether a member owes a reply or *you* owe the next task — and the second case is a stall of your own making, which you cannot see by thinking about it.
 5. **Check the team is alive before you settle in to wait again.** `scripts/roster.sh verify <dir>` watches each pane for a moment and separates a member that is working from one frozen on an approval prompt, dead, or replaced. This is the one thing you use tmux for.
 6. Repeat. Accept a milestone only after you've confirmed it yourself.
 
@@ -48,6 +48,43 @@ Work the facts, in this order, and stop guessing:
 - `scripts/roster.sh list <dir>` — the team. `scripts/roster.sh verify <dir>` — who is alive, exited, or in a pane that now belongs to someone else.
 - Run `verify` whenever a notify fails or a member goes quiet for a round.
 - `scripts/roster.sh sync <dir>` rebuilds the roster from the live panes if the file is lost or stale.
+
+## End-of-turn checklist
+Run this every turn. Re-arming is the step everyone forgets, including thinkers who have just told a member off for forgetting it.
+
+1. Wrote what I owe (`in` for each member that needs one)?
+2. Ran `status.sh` and acted on whoever it says owes what?
+3. **Watcher armed, in the foreground, as my last action?** A watcher you did not re-arm is a watcher you no longer have.
+
+## Verify against the commit, not the working tree
+While a worker is editing, **the file on disk shows whoever saved last, not the branch.** If you share a worktree, reading the file tells you nothing about what the worker committed.
+
+Use `git show HEAD:<path>` — or the worker's stated SHA — for any claim about what is committed. A thinker that read the working tree once concluded a fix was already present, told the worker its task was done *and* that its own report contradicted itself. Both wrong. The worker checked `git show HEAD:<path>`, found the committed branch still had the defect, and pushed back; had it complied, it would have reverted a correct fix.
+
+**Separate build lanes.** Two agents running builds in one worktree collide — lock contention, half-built trees, tests compiling a tree the other is mid-edit on. The worker owns the repo worktree; build and run from a **separate** one. Whoever starts a long build says so in their file first.
+
+## Expect to be contradicted
+A member that disagrees with your premise and shows why is doing its job. The two best findings of one session came from a worker refusing an instruction and proving the thinker wrong. Say so explicitly in the task: *if you think I have the premise wrong, say so with evidence rather than complying.*
+
+That is not in tension with "the thinker verifies" — it is the same rule pointed the other way. Neither side's claim is worth more than its evidence.
+
+## A member can lose its context
+A member's context can be cleared mid-session while its pane, roster entry and mailboxes all look completely normal. Nothing in the files will tell you.
+
+If a member reports that it has lost context — the convention is to say so on the **first line** of its `out` — re-brief it from scratch rather than assuming continuity. Do not refer back to decisions, SHAs or conventions it agreed to before; they are gone. This is what "exchange files are self-contained" is for.
+
+## Rotating a member
+Members run out of context or get expensive. "Cheap member" is a choice you made, not a property: one session's Opus worker cost more than the thinker verifying it.
+
+To rotate: write a handoff into the new member's `in` (current task, what is done, the SHAs and decisions that matter), spawn the replacement, kill the old pane, and let `roster.sh sync` reconcile. Stand the old member down explicitly first — an ignored member can wake later and duplicate work.
+
+## What is worth re-running
+Verification costs real time; re-running a 15-minute build for every claim is not a strategy. Re-run independently when the claim is about:
+
+- **the live path** — anything a user would actually hit;
+- **an absence** — "no more callers", "no longer logged", "not reachable". Absence claims are where greps quietly lie.
+
+Accept from pasted raw output, with a spot-check of the command itself, when the claim is a routine positive result on a path you have already re-run this session.
 
 ## Cardinal rule: verify, don't trust
 Treat every "removed / fixed / verified / passing / clean" claim as **false until you confirm it.** In real runs, almost every round contained at least one claim that didn't survive checking.

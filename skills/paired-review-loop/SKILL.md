@@ -34,8 +34,9 @@ The team is whatever you ask for. A single worker is the common case; a worker p
 <session>/
   session.env              the thinker's pane
   roster.tsv               who is on the team, their role, agent and pane
-  members/<name>/in        thinker → that member: the current task
-  members/<name>/out       that member → thinker: the current report
+  members/<name>/in            thinker → that member: the current task
+  members/<name>/in-addendum   extra work that arrived mid-task; read after in
+  members/<name>/out           that member → thinker: the current report
   members/<name>/evidence/NN-topic.txt    raw proof, one file per claim
 ```
 
@@ -52,14 +53,20 @@ Every member owns its own directory and writes nowhere else in the session.
 
    ```
    # thinker — every member's report, quote the pattern
-   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 900
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540
    # member — your own next task
-   scripts/watch.sh <dir>/members/<you>/in --interval 15 --timeout 900
+   scripts/watch.sh <dir>/members/<you>/in --interval 15 --timeout 540
    ```
 
-   It exits `0` when a file changed and `3` when the deadline passed with nothing happening. Keep **exactly one** watcher armed; kill it when you wake, act, then arm the next one.
+   Both outcomes exit `0`; the first word of its output is `CHANGED` or `TIMEOUT`. Neither is an error, so a harness never announces a failure that did not happen. Keep **exactly one** watcher armed; kill it when you wake, act, then arm the next one.
 6. **On a timeout wake, check whose move it is — don't assume.** Run `scripts/status.sh <dir>`. It reads the mailbox timestamps and tells you, per member, whether that member owes a reply or *you* owe the next task. The stall this prevents is both sides believing the other owes something, and you cannot detect that from memory: your memory is the part that is wrong.
 7. **Waking is not reading.** Whoever wakes you, the thinker reads **every** member's `out` — several can report while it is busy, and answering only the last one to ring silently drops the rest.
+8. **New work mid-task goes in `in-addendum`, never into `in`.** Rule 1 makes `in` the current task, overwritten each round — so while a member is working, overwriting `in` destroys the task it is executing and appending buries it. When more work arrives before the member has reported:
+   - Write it to `<session>/members/<name>/in-addendum`.
+   - The member reads `in-addendum` **after** finishing `in`, never instead of it, and deletes it once folded into that round's `out`.
+   - Anything that changes the current task rather than adding to it is not an addendum: let the member finish, then write a fresh `in`.
+
+   `watch.sh` on `<dir>/members/<you>/in*` picks up both.
 
 ## Quick start
 - **Thinker, one worker:** `scripts/session.sh init /tmp/prl-demo`; write the task to `/tmp/prl-demo/members/worker/in`; then
@@ -73,4 +80,4 @@ Every member owns its own directory and writes nowhere else in the session.
   tester-1    tester   codex
   tester-2    tester   agy --dangerously-skip-permissions
   ```
-- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 900` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.
+- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 540` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.

@@ -2,25 +2,39 @@
 
 Read the row for **your** agent. Getting this wrong is the single most common way a session stalls, and it fails silently: you believe you are waiting, and nothing is ever going to wake you.
 
-## What "waiting" actually requires
+## Run it in the foreground, as your last action
 
-`scripts/watch.sh` does not wake you. It exits — and your **harness** wakes you because it was watching that process. So the requirement is not "start the watcher in the background". It is:
+```
+scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540
+```
 
-> Start the watcher in a way your harness tracks, so that when it exits, your harness gives you a turn.
+Call it in the **foreground**, as the last thing you do in the turn. The call blocks until a file changes or the deadline passes, and then **control comes back to you** — which is the only thing that counts.
 
-Those are different things, and the difference is the whole bug.
+That last point is the whole idea, and it is easy to get backwards:
 
-## Per agent
+> In an agent harness, a fallback means *control returns to you*. It does not mean *a process notices something*.
 
-| Agent | How to arm it |
+A process that notices a stall and cannot give you a turn has achieved nothing. One session built exactly that: a detached monitor spotted a stall, printed a perfect diagnosis, and wrote it to a log nobody was reading.
+
+## What does not work
+
+| Way of arming it | What happens |
 | --- | --- |
-| **Claude Code** | The Bash tool's **`run_in_background: true`** parameter. Not a trailing `&`. |
-| **Codex, AGY, anything else** | Use your harness's equivalent — whatever gives you a turn when a tracked command finishes. If it has none, see *If you cannot be woken* below. |
+| **Foreground, blocking** | Works. Field-tested across a long session without a single failure. |
+| **Harness background task** (Claude Code `run_in_background: true`) | **Can be reaped.** One session saw six consecutive arms killed inside a minute, after four earlier ones had survived their full deadline. Use it only where you can tolerate losing the wake. |
+| **Trailing `&`** | Never works. The shell backgrounds it, your call returns in milliseconds, and nothing is watching the watcher. |
+| **`nohup` / `setsid`** | Survives and is useless. A process outside the harness cannot give an agent a turn. |
+
+## Keep the deadline under your harness's cap
+
+Harnesses cap a foreground call — 600s in Claude Code. A `--timeout` above that means **the tool ends your call, not the script**, and you cannot tell "nothing happened" from "I was cut off".
+
+So the default is **540s**, safely under. `watch.sh` warns if you ask for more. If your harness has a different cap, stay about a minute below it.
 
 ## Why a trailing `&` does not work
 
 ```
-scripts/watch.sh <file> --timeout 900 &      # WRONG
+scripts/watch.sh <file> --timeout 540 &      # WRONG
 ```
 
 The shell backgrounds the process and your foreground call returns immediately. Your harness saw a command that finished in milliseconds, so there is nothing left for it to watch, and **nothing will ever hand you a turn**.
@@ -50,3 +64,12 @@ The thinker polls the team and pokes members that have gone quiet — that is wh
 3. Arm the next watcher, the tracked way.
 
 Exactly one watcher at a time, always.
+
+## "Exactly one watcher" means one on the mailboxes
+
+It is a rule about **mailbox watchers**, not about all background work. Tailing a build log, monitoring a long job, waiting on a deploy — those are separate concerns and you may have them running at the same time as your one mailbox watcher.
+
+Two things follow:
+
+- **`nohup` any long job you start**, and do not rely on the watcher's lifetime to keep it alive. Harnesses reap background commands: one was stopped with *"Background command … was stopped"*, and only `nohup` saved the batch it had launched.
+- **Keep the mailbox watcher single** so waking is unambiguous. Two of those and you cannot tell which round a wake belongs to.

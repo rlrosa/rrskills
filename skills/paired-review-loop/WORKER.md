@@ -11,10 +11,10 @@ You are the only member that edits the repo. Testers, if the thinker started any
 4. Write `<session>/members/<you>/out` (format below). Then arm a deadline and end your turn:
 
    ```
-   scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 900
+   scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 540
    ```
 
-   **Arm it the way your harness tracks background commands** — in Claude Code that is the Bash tool's `run_in_background: true`, never a trailing `&`. [WAITING.md](WAITING.md) has the per-agent detail and is worth reading once: getting this wrong leaves you asleep with nothing able to wake you.
+   **Run it in the FOREGROUND, as your last action of the turn** — the call blocks, then hands control back to you. A harness background task can be reaped, and `&` or `nohup` never wake anyone. Keep `--timeout` under your harness's cap on a foreground call (600s in Claude Code, hence the 540s default). See [WAITING.md](WAITING.md).
 
 ## Writing `out` is how you reply
 **Do not type into the thinker's pane.** `scripts/notify.sh` is the thinker's tool for poking a member that has gone quiet; it is not your outbox. The thinker is watching your `out` file and will see it within seconds.
@@ -30,6 +30,29 @@ Trying to reach the thinker through its terminal instead is worse in every way: 
 - **Never fabricate or mislabel.** No synthetic result labeled "live"; no host output labeled container; no "clean" summary of a file that contains errors.
 - If a step genuinely can't run: write `NOT RUN: <reason>` — never fake it.
 
+## End-of-turn checklist
+1. Evidence files written for every claim?
+2. `out` written, current state at the **top**, nothing stale left below it?
+3. **Watcher armed, in the foreground, as my last action?** A watcher you did not re-arm is a watcher you no longer have.
+
+## Check before you comply
+If the thinker's instruction rests on a premise you believe is wrong, **say so with evidence instead of complying.** You are closer to the code than it is.
+
+The usual case: it read the working tree while you were mid-edit and concluded your fix was already there, or already reverted. `git show HEAD:<path>` settles it — that is what is committed, and the file on disk is only whoever saved last. A worker that checked this avoided reverting its own correct fix on a wrong instruction.
+
+Disagreeing with evidence is part of the job, not insubordination. A claim of yours is worth exactly its evidence, and so is one of the thinker's.
+
+## A guard nobody has seen fail is not a guard
+Before you report a test or check as proof, make it fail once on purpose. Change the thing it is supposed to catch and confirm it goes red.
+
+One worker found its own fixture passing for the wrong reason this way — the tell was a mutation that broke nothing. A green test that has never been seen to fail proves only that it ran.
+
+## If you have lost your context
+Say so on the **first line** of your `out`. Your pane, roster entry and mailboxes will all look completely normal, so nothing else will tell the thinker. Ask to be re-briefed rather than guessing at what you agreed to earlier.
+
+## Keep out of the thinker's build lane
+You own the repo worktree. If you are running a long build or test, say so in your `out` before you start — two agents building in one tree collide, and a run that compiled a tree someone else was mid-edit on is a wasted cycle, not a finding.
+
 ## Don't break the neighbors
 When you change a module, `grep` its consumers/importers and verify each still loads and works — including across repos and containers. State which consumers you checked.
 
@@ -37,6 +60,8 @@ When you change a module, `grep` its consumers/importers and verify each still l
 - What changed (files), and per claim, which `evidence/NN-*.txt` proves it.
 - **Regression & side-effect check:** full test-suite result + exit code; consumers verified; which container/process logs you read and what they showed **during real use**.
 - Any deviations or `NOT RUN` items, stated plainly. Do **not** write "matches exactly / all clean" unless it literally does — the thinker will check, and a false "done" costs more than an honest "partial."
+
+**Overwrite it. Don't let last round's text survive underneath this round's.** A round-18 report that still ended with `ROUND 15 COMPLETE` and a by-then-false "no code changed since <sha>" got read and believed, because the file's own contract says the current state is at the top. A stale claim inside a file that invites trust is worse than a stale file on its own. If you must keep older text, put it under an explicit `## superseded, ignore` heading.
 
 ## Safety
 - **Never commit secrets** (`.env`, keys) or `node_modules` / `dist`. Before committing, run `git status` + `git diff --cached --stat`; if anything unexpected is staged, STOP and report instead of committing.

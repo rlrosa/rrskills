@@ -296,6 +296,20 @@ if [ "$BOOTSTRAP" = true ]; then
     echo "$MEMBER_PANE"
     exit 1
   fi
+
+  # Typed and submitted are still not the same as acted upon. Press Enter again
+  # while the pane shows no sign of working — that alone recovers a bootstrap
+  # left sitting in the input box.
+  #
+  # Only warn if it never stirs. Not every agent visibly works: a quick one can
+  # answer and go idle inside the sample, and a stand-in like `cat` never
+  # animates at all. Failing the spawn on that would reject members that are
+  # perfectly fine, so say what to look at and let the caller decide.
+  if ! prl_wait_until_working "$MEMBER_PANE"; then
+    echo "spawn-member: '$MEMBER_NAME' took the bootstrap but showed no sign of working." >&2
+    echo "spawn-member: check pane $MEMBER_PANE - if the message is still sitting in its input" >&2
+    echo "spawn-member: box then it was never submitted, which on Claude reads as ctx: 0%." >&2
+  fi
 fi
 
 # Claude Code drops to manual mode when the chosen model cannot run the

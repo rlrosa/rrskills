@@ -43,7 +43,12 @@ case "$VERB" in
     SESSION="${2:?usage: session.sh init <session-dir>}"
     mkdir -p "$SESSION/members"
     SESSION=$(cd "$SESSION" && pwd)
+    prl_assert_session_owner "$SESSION" || exit 4
     prl_set_key "$SESSION/session.env" PRL_SESSION_DIR "$SESSION"
+    # Stamp which copy of the scripts owns this session, so a second copy can
+    # refuse rather than quietly work against a different layout.
+    prl_set_key "$SESSION/session.env" PRL_SCRIPTS_DIR "$PRL_SCRIPTS_DIR"
+    prl_set_key "$SESSION/session.env" PRL_VERSION "$PRL_VERSION"
     "$SCRIPT_DIR/roster.sh" init "$SESSION" > /dev/null
     echo "$SESSION"
     ;;

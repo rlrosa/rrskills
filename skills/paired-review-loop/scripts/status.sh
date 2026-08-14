@@ -19,8 +19,11 @@
 #   worker     thinker   3m     OK       replied; you owe the next task
 #   tester-1   tester-1  22m    WAITING  frozen with its task unanswered
 #
-# Exit 0 when nothing needs attention, 1 when something does: a move older than
-# PRL_STALL_AFTER (default 600s), or a pane that is not OK.
+# Exit 0 when nothing needs attention, 1 when something does: a pane that is not
+# OK, or a move older than PRL_STALL_AFTER (default 600s) whose pane is also
+# idle. A member that has been quiet a long time but is visibly working is
+# reported as working, not as stuck — long silences are normal when the job is
+# long, and treating them as stalls makes agents nudge busy peers.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -37,16 +40,29 @@ usage() {
 }
 
 case "${1:-}" in
-  '' ) usage 2 ;;
+  '') usage 2 ;;
   -h | --help) usage 0 ;;
 esac
+
+# Accept both `status.sh <dir>` and `status.sh --session <dir>`; notify.sh takes
+# the flag form, and having to remember which script wants which is a papercut
+# that costs a command every time.
+if [ "$1" = "--session" ]; then
+  shift
+  [ $# -gt 0 ] || usage 2
+fi
 
 SESSION="$1"
 [ -d "$SESSION" ] || { echo "status: no such session dir: $SESSION" >&2; exit 1; }
 SESSION=$(cd "$SESSION" && pwd)
+prl_assert_session_owner "$SESSION" || exit 4
 
 mtime_of() {
   stat -c %Y "$1" 2>/dev/null || echo 0
+}
+
+roster_pane_of() {
+  "$SCRIPT_DIR/roster.sh" get "$SESSION" "$1" pane 2>/dev/null
 }
 
 # Render a duration the way a human reads it while scanning for the outlier.
@@ -112,8 +128,17 @@ while read -r name; do
       MISMATCH) note="its pane now belongs to someone else" ;;
     esac
   elif [ "$since" -ge "$PRL_STALL_AFTER" ]; then
-    needs_attention=1
-    note="$note - stuck for $(humanise_seconds "$since")"
+    # Silence is not the same as being stuck. Ask the pane whether it is working
+    # before crying wolf: routine jobs here run longer than any threshold worth
+    # setting — a whole-world dry run takes ~9 minutes — and an agent that
+    # believes "stuck" starts nudging a peer that is busy doing what it asked.
+    pane=$(roster_pane_of "$name")
+    if [ -n "$pane" ] && prl_pane_is_busy "$pane"; then
+      note="$note - quiet $(humanise_seconds "$since") but its pane is working"
+    else
+      needs_attention=1
+      note="$note - quiet for $(humanise_seconds "$since") and its pane is idle"
+    fi
   fi
 
   printf '%-12s %-10s %-6s %-9s %s\n' \

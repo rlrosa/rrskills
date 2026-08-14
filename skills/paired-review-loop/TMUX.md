@@ -89,18 +89,20 @@ prl: worker reported - round 3 + evidence/04-*.txt
 
 | Code | Meaning | What to do |
 | --- | --- | --- |
-| `0` | Delivered; the pane reacted | Nothing. End your turn and wait. |
+| `0` | Sent. `ACCEPTED` = it is working now; `DELIVERED` = keys landed but it went idle; `QUEUED` = could not be confirmed | Watch its `out` file, not this line. |
 | `10` | No tmux server reachable | Fall back to `scripts/watch.sh` on the counterpart's file. |
 | `11` | No such pane | The counterpart is gone. Tell the human. |
 | `12` | Pane is at a shell prompt | Its agent has exited. Nothing was sent. Tell the human; do not retry. |
 | `13` | Keys sent, pane did not react | Treat as unreliable: arm a watcher as well, and say so. |
 | `14` | The pane says it is someone else | Roster is stale. Nothing was sent. `roster.sh verify`, then fix it before sending to anyone. |
+| `15` | The pane holds unsent text | A human is probably mid-sentence. Nothing was sent, because Enter would submit their fragment too. Wait, or `--force`. |
 | `2` | Bad usage (multi-line message) | Fix the call. |
 
-Two of these exist to stop a send rather than report one, and both fail *before* typing anything:
+Three of these stop a send rather than report one, and all fail *before* typing anything:
 
 - **`12`** — a pane whose agent has exited is a live shell, and typing a message into a shell runs it as a command. `notify.sh` checks the pane's foreground command first.
 - **`14`** — the pane's `@prl_member` tag does not match the member you addressed. Something reused or retagged that pane, so the roster is lying about where that agent is.
+- **`15`** — the target's input line already holds unsent text. `notify.sh` types its message and presses Enter, so on a pane where a human is midway through a sentence that Enter would submit their unfinished line along with the nudge, starting work on an instruction nobody meant to send. There is no safe way to type around it, so it refuses.
 
 With `--role`, each member is reported separately and the exit code is the worst one seen, so one dead tester does not hide the others succeeding.
 
@@ -112,13 +114,13 @@ Write your file, arm a watcher, end your turn.
 
 ```
 # thinker: every member's report. QUOTE the pattern.
-scripts/watch.sh '/tmp/prl-demo/members/*/out' --interval 15 --timeout 900
+scripts/watch.sh '/tmp/prl-demo/members/*/out' --interval 15 --timeout 540
 
 # member: your own next task
-scripts/watch.sh /tmp/prl-demo/members/worker/in --interval 15 --timeout 900
+scripts/watch.sh /tmp/prl-demo/members/worker/in --interval 15 --timeout 540
 ```
 
-Exit `0` when a file changed, exit `3` when the deadline passed with nothing happening. Keep exactly one armed, and kill it when you wake before arming the next.
+Both outcomes exit `0`; the first word of its output tells you which — `CHANGED <file>` or `TIMEOUT <seconds>`. Keep exactly one armed, and kill it when you wake before arming the next.
 
 **Quote the pattern.** On round one no `out` file exists, so an unquoted `*/out` finds nothing to expand and the shell passes the literal `*` through as a filename that can never appear — the watcher then sits there while the worker reports, and only the deadline eventually frees it. `watch.sh` re-expands patterns itself on every poll, which fixes the unquoted case too and means a member who joins mid-wait is picked up as well; quoting just makes it unambiguous.
 
@@ -135,7 +137,7 @@ Every one of them ends with both sides believing the other owes a reply. Notice 
 | Someone believes they handed off but wrote nothing | No file changed at all | The other side's deadline + `status.sh` |
 | The recipient woke, read, and decided there was nothing to do | Both now think it is the other's move | Either side's deadline + `status.sh` |
 
-**On an exit-3 wake, do not assume you are still waiting.** Run `scripts/status.sh <session>`. It compares each member's `in` against its `out` and tells you who actually owes what:
+**When a wait ends with `TIMEOUT`, do not assume you are still waiting.** Run `scripts/status.sh <session>`. It compares each member's `in` against its `out` and tells you who actually owes what:
 
 ```
 member       owes       since  pane      note
@@ -226,6 +228,34 @@ What a spawn does, step by step:
 6. Prints the member's pane ID.
 
 Every member's CLI must already have this skill installed — `./install.sh` from the repo root does that for Claude, AGY and Codex.
+
+## Telling a thinking member from a hung one
+
+The hardest state to read, and the most expensive to get wrong. A hung member looks exactly like a working one: its timer keeps counting, so `roster.sh verify` reports `OK` and any "is the pane redrawing" check says yes. One member sat like that twice in a session, for 17 and 15 minutes, showing `Working (16m 34s)` the whole time — it had read its task and then done nothing.
+
+**Four signs together mean hung, not thinking:**
+
+1. The elapsed timer is advancing.
+2. **No subprocess** — nothing it claims to be running actually exists.
+3. **Context percentage unchanged** — a thinking agent consumes context; a stuck one does not.
+4. **Nothing new on disk** — no output files, no evidence, no writes anywhere.
+
+Any one alone means nothing. All four together is the signature.
+
+**What to do:** interrupt after about 12 minutes of it. And when you replace or abandon a member, **stand it down explicitly** in its `in` — one that is merely ignored can wake up much later and fire a duplicate batch at whatever it was doing.
+
+## Probing liveness is unreliable inside a command sandbox
+
+Two traps that both read as facts because they reproduce every time:
+
+- **`ps -p <pid>` reports a live detached job as dead** when run inside a sandboxed command, and correctly as running with the sandbox off. Check job liveness with the sandbox off, or you will conclude a healthy run has died.
+- **Unanchored `pgrep -f` matches inside argv.** `pgrep -a -f bazel` matched four unrelated sandbox processes because `bazel.build` appeared inside a `--policy-json` argument. Anchor the pattern to the executable, or match on the process name, before concluding anything is running.
+
+## Escape does not do what you want to a codex pane
+
+The obvious recovery for a queued-but-unread nudge is to press Escape and retype. On a codex pane that **pauses its `/goal`**, and it then needs `/goal resume` before it will do anything — a lost cycle, and it looks like the member simply stopped.
+
+If a nudge appears stuck in a codex pane, leave the keyboard alone and let its own wait deadline fire.
 
 ## When it does not work
 

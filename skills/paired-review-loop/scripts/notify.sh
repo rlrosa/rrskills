@@ -25,10 +25,15 @@
 # would act on the nudge instead of reading it.
 #
 # Exit codes, so a caller can tell what to do next:
-#   0   delivered  - the pane reacted to the keystrokes, or was mid-turn and the
-#                    message was queued into it unconfirmed (reported as QUEUED;
-#                    a busy TUI shows no sign of accepting input, so its own
-#                    wait deadline is what covers a nudge that never took)
+#   0   sent. The word on stdout says how much is actually known:
+#         ACCEPTED  - the keystrokes landed and the pane is now working
+#         DELIVERED - the keystrokes landed but the pane went idle again. It may
+#                     not have picked the message up; watch its out file.
+#         QUEUED    - sent to a pane that could not show whether it took, either
+#                     because it was mid-turn or too narrow. Its own wait
+#                     deadline is the backstop.
+#       None of these mean the message was understood. Only that member's own
+#       out file proves that.
 #   10  no tmux    - fall back to watch.sh on the teammate's file
 #   11  no pane    - the teammate's pane is gone; tell the human
 #   12  shell      - the pane is at a shell prompt, so its agent has exited.
@@ -37,6 +42,10 @@
 #   14  wrong pane - the pane says it is someone else. The roster is stale;
 #                    nothing was sent. Run 'roster.sh sync' and look before
 #                    trying again.
+#   15  occupied   - the pane's input line holds unsent text, most likely a
+#                    human midway through a sentence. Nothing was sent, because
+#                    Enter would have submitted their fragment too. --force
+#                    overrides.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -53,12 +62,14 @@ MEMBER=""
 ROLE=""
 PANE=""
 MSG=""
+FORCE=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --session) SESSION="$2"; shift 2 ;;
     --member) MEMBER="$2"; shift 2 ;;
     --role) ROLE="$2"; shift 2 ;;
+    --force) FORCE=true; shift ;;
     -h | --help) usage 0 ;;
     --*)
       echo "notify: unknown option '$1'" >&2
@@ -79,6 +90,7 @@ if [ -n "$MEMBER" ] || [ -n "$ROLE" ]; then
   # In the addressed forms the lone positional is the message, not a pane.
   [ -z "$MSG" ] && MSG="$PANE" && PANE=""
   [ -n "$SESSION" ] || { echo "notify: --session is required with --member/--role" >&2; exit 2; }
+  prl_assert_session_owner "$SESSION" || exit 4
 fi
 
 [ -n "$MSG" ] || usage 2
@@ -112,6 +124,15 @@ ring_pane() {
     return 12
   fi
 
+  # Never press Enter on a line somebody else is composing.
+  if [ "$FORCE" != "true" ] && prl_pane_input_occupied "$pane"; then
+    echo "notify: $label: pane $pane has unsent text in its input line. Nothing sent." >&2
+    echo "notify: pressing Enter there would submit whatever is half-written along with" >&2
+    echo "notify: this message, starting work on an instruction nobody finished. Wait, or" >&2
+    echo "notify: clear the line yourself, or pass --force if you know it is safe." >&2
+    return 15
+  fi
+
   before=$(prl_capture "$pane")
 
   prl_send_verified "$pane" "$MSG"
@@ -131,15 +152,20 @@ ring_pane() {
   sleep "$PRL_REACT_DELAY"
   after=$(prl_capture "$pane")
 
-  # A changed pane proves the keystrokes landed and the agent is processing
-  # them. It does not prove the agent understood the nudge — only the reply on
-  # the teammate's own file proves that.
   if [ "$before" = "$after" ]; then
     echo "notify: $label: sent to $pane but the pane did not react" >&2
     return 13
   fi
 
-  echo "DELIVERED $label $pane"
+  # Delivered says the keystrokes landed. It does not say the agent picked the
+  # message up — one member showed DELIVERED and then sat seventeen minutes
+  # without touching its file. So look once more for the pane actually working,
+  # and only claim ACCEPTED when it is.
+  if prl_pane_is_busy "$pane"; then
+    echo "ACCEPTED $label $pane (it is working now)"
+  else
+    echo "DELIVERED $label $pane (idle after the nudge - watch its out file, not this line)"
+  fi
 }
 
 # Look a member up and make its pane agree it is that member before sending.

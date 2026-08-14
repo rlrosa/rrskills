@@ -299,8 +299,10 @@ try {
   const idleFile = path.join(tmpDir, 'nobody-writes-here');
   fs.writeFileSync(idleFile, 'initial\n');
   const timedOut = runScript(watch, [idleFile, '--interval', '1', '--timeout', '3']);
-  assert.strictEqual(timedOut.code, 3, 'a deadline passing with no change should exit 3');
-  assert(timedOut.stdout.includes('TIMEOUT'), 'it should say it timed out, not that something changed');
+  // Exit 0: reaching the deadline is a normal end to a wait, and a non-zero code
+  // made every harness announce a failure that had not happened.
+  assert.strictEqual(timedOut.code, 0, 'a deadline passing is not an error');
+  assert(timedOut.stdout.startsWith('TIMEOUT'), 'the outcome is told by the first word of stdout');
 
   // A change inside the window still wins; the deadline must not mask it.
   const beatsDeadline = execFileSync(

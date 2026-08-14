@@ -6,6 +6,48 @@
 # unique across the whole tmux server and never reused, so one pane can reach
 # any other pane in any session or window without knowing where it lives.
 
+# Where this copy of the scripts lives, and which release it is from. A machine
+# can easily hold several copies — a checkout, an installed plugin, an old
+# symlink — and they are not always the same version.
+PRL_SCRIPTS_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PRL_VERSION="$(cat "$PRL_SCRIPTS_DIR/../../../VERSION" 2>/dev/null \
+  || cat "$PRL_SCRIPTS_DIR/../../../../VERSION" 2>/dev/null || echo unknown)"
+
+# Refuse to touch a session that a different copy of these scripts created.
+#
+# The failure this prevents is silent and expensive: a whole session was run
+# against an older copy whose layout predated members/ and roster.tsv, and
+# nothing complained, because that copy's notify.sh worked fine. Mixing copies
+# mid-session means half the tools look for files the other half never writes.
+#
+# Set PRL_ALLOW_MIXED=1 to proceed anyway, e.g. while deliberately upgrading a
+# live session.
+prl_assert_session_owner() {
+  local session="$1" env_file="$1/session.env" owner owner_version
+  [ -f "$env_file" ] || return 0
+  owner=$(
+    # shellcheck disable=SC1090
+    . "$env_file" 2>/dev/null
+    printf '%s' "${PRL_SCRIPTS_DIR:-}"
+  )
+  [ -z "$owner" ] && return 0
+  [ "$owner" = "$PRL_SCRIPTS_DIR" ] && return 0
+
+  owner_version=$(
+    # shellcheck disable=SC1090
+    . "$env_file" 2>/dev/null
+    printf '%s' "${PRL_VERSION:-unknown}"
+  )
+  echo "prl: this session belongs to a different copy of the scripts." >&2
+  echo "prl:   session was created by: $owner (version $owner_version)" >&2
+  echo "prl:   you are running:        $PRL_SCRIPTS_DIR (version $PRL_VERSION)" >&2
+  echo "prl: those copies can disagree about the session layout, so mixing them" >&2
+  echo "prl: half-works and loses messages. Use the owning copy, or re-run with" >&2
+  echo "prl: PRL_ALLOW_MIXED=1 if you know they match." >&2
+  [ "${PRL_ALLOW_MIXED:-}" = "1" ] && return 0
+  return 1
+}
+
 # Seconds to wait between typing a line and pressing Enter. Agent TUIs redraw
 # their input box after each keystroke burst; sending Enter too early can land
 # before the text is in the box.
@@ -54,6 +96,29 @@ prl_pane_is_shell() {
 # Print the pane's visible contents, used to tell whether it reacted to input.
 prl_capture() {
   tmux capture-pane -p -t "$1" 2>/dev/null
+}
+
+# Columns a cursor may sit at and the input box still be empty. Prompts are
+# short — "❯ " and "› " both leave it at 2 — so anything past this means
+# somebody has typed and not yet sent.
+PRL_EMPTY_INPUT_COLUMNS="${PRL_EMPTY_INPUT_COLUMNS:-4}"
+
+# True when the pane's input line appears to hold unsent text.
+#
+# notify.sh types its message and presses Enter. If a human was midway through
+# composing a line in that pane, Enter submits their unfinished sentence along
+# with the nudge, and the agent starts work on an instruction its human never
+# meant to send. There is no safe way to type around it: send-keys without Enter
+# corrupts the pending line, and display-message only paints the status bar,
+# which no agent reads. So detect it and refuse.
+#
+# The cursor is the signal, not the screen: a greyed-out placeholder leaves the
+# cursor parked at the start of the box, real characters push it along.
+prl_pane_input_occupied() {
+  local column
+  column=$(prl_cursor "$1" | cut -d, -f1)
+  [ -n "$column" ] || return 1
+  [ "$column" -gt "$PRL_EMPTY_INPUT_COLUMNS" ]
 }
 
 # Print a pane's cursor position as "column,row".
@@ -202,6 +267,23 @@ prl_pane_is_busy() {
   sleep "$PRL_BUSY_SAMPLE"
   second=$(prl_capture "$pane")
   [ "$first" != "$second" ]
+}
+
+# Wait for a pane to start working, pressing Enter again if it does not.
+# Returns 1 if it never stirs.
+#
+# Submitting a message is not the same as the agent acting on it. A freshly
+# spawned Claude pane was found holding the whole bootstrap in its input box,
+# unsubmitted, in vim insert mode — the giveaway being a context counter still
+# reading 0%. The generic version of that tell is that the pane never starts
+# redrawing, so watch for activity and re-press Enter while it stays still.
+prl_wait_until_working() {
+  local pane="$1" attempts="${2:-6}" attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    prl_pane_is_busy "$pane" && return 0
+    tmux send-keys -t "$pane" Enter 2>/dev/null || return 1
+  done
+  return 1
 }
 
 # Block until a pane stops redrawing, meaning a program that just started has
