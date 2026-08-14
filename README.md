@@ -2,7 +2,7 @@
 
 AI Assistant Skills collection for **Claude Code**, **AGY (Antigravity)**, and **OpenAI Codex**.
 
-Current version: **0.3.0** (see `VERSION`). Released versions are git tags, `v<version>`.
+Current version: **0.4.0** (see `VERSION`). Released versions are git tags, `v<version>`.
 
 ## Skills Included
 
