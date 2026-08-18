@@ -1,6 +1,6 @@
 ---
 name: paired-review-loop
-description: Run a file-based loop where a "thinker" (reviewer/orchestrator) drives one or more helper agents — a worker that implements, plus optional testers that run things and capture evidence — and independently verifies every claim before accepting it. Use when supervising or driving other agents through multi-step work via files, when acting as the reviewing/orchestrating thinker, or when running as a worker or tester in such a loop. Members talk only through files; under tmux the thinker can additionally spawn each member's pane with the agent and model you choose (claude, codex, agy) and poke one that has gone quiet. Triggers include "drive a worker agent", "thinker/worker", "review loop", "spawn a team of agents in tmux", or verifying another agent's work against real evidence.
+description: Run a file-based loop where a "thinker" (reviewer/orchestrator) drives one or more helper agents — a worker that implements, plus optional testers that run things and capture evidence — and independently verifies every claim before accepting it. Use when supervising or driving other agents through multi-step work via files, when acting as the reviewing/orchestrating thinker, or when running as a worker or tester in such a loop. Members talk only through files. The human creates every pane and hands over the IDs; the skill cannot create, close or resize a pane, and can only reach the ones it was given. Triggers include "drive a worker agent", "thinker/worker", "review loop", "spawn a team of agents in tmux", or verifying another agent's work against real evidence.
 ---
 
 # paired-review-loop
@@ -21,7 +21,7 @@ The team is whatever you ask for. A single worker is the common case; a worker p
 - **Worker / implementer →** read **[WORKER.md](WORKER.md)**.
 - **Tester →** read **[TESTER.md](TESTER.md)**.
 - **Everyone, before you wait →** read **[WAITING.md](WAITING.md)**. Arming a watcher the wrong way is the most common way a session stalls, and it fails silently — you believe you are waiting and nothing will ever wake you. The right way differs per agent.
-- **Running in tmux? →** also read **[TMUX.md](TMUX.md)** — how the thinker starts the team and reaches a member that has gone quiet.
+- **Running in tmux? →** also read **[TMUX.md](TMUX.md)** — how a human hands panes over, and how the thinker reaches a member that has gone quiet.
 
 ## Roles
 - **worker** — implements. **The only member that edits the repo.**
@@ -69,15 +69,12 @@ Every member owns its own directory and writes nowhere else in the session.
    `watch.sh` on `<dir>/members/<you>/in*` picks up both.
 
 ## Quick start
-- **Thinker, one worker:** `scripts/session.sh init /tmp/prl-demo`; write the task to `/tmp/prl-demo/members/worker/in`; then
-  `scripts/spawn-member.sh --session /tmp/prl-demo --name worker --role worker --cmd 'claude'`.
-- **Thinker, a whole team:** write a spec and run
-  `scripts/spawn-team.sh --session /tmp/prl-demo --spec team.txt --cwd /path/to/repo`.
+- **Human:** open a pane per member, start the agent you want in each, and hand the thinker the pane IDs. The skill cannot make panes and will not touch one you have not registered.
+- **Thinker:** `scripts/session.sh init /tmp/prl-demo`; `scripts/session.sh register /tmp/prl-demo thinker`; then per member
 
   ```
-  # name      role     agent
-  worker      worker   claude --model claude-sonnet-5
-  tester-1    tester   codex
-  tester-2    tester   agy --dangerously-skip-permissions
+  scripts/roster.sh add   /tmp/prl-demo worker worker %180 /path/to/repo 'claude --model claude-sonnet-5'
+  # write the first task to /tmp/prl-demo/members/worker/in
+  scripts/roster.sh brief /tmp/prl-demo worker
   ```
 - **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 540` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.

@@ -5,8 +5,15 @@
 #       Create an empty roster.
 #
 #   roster.sh add <session-dir> <name> <role> <pane> <cwd> <agent-command>
-#       Record a member, replacing any existing row with the same name, and
-#       tag its pane so the pane carries its own identity.
+#       Register a pane a HUMAN created and handed over. This skill never makes
+#       panes; the roster is the list of the ones it is allowed to touch, so a
+#       pane that is not in it cannot be reached at all. Replaces any existing
+#       row with the same name, and tags the pane with its identity.
+#
+#   roster.sh brief <session-dir> <name>
+#       Tell a registered member which role it is playing and where its mailbox
+#       is, by typing into the pane you registered for it. Use once, after the
+#       human has started an agent there.
 #
 #   roster.sh list <session-dir> [role]
 #       Print the roster, optionally only the members holding one role.
@@ -187,6 +194,57 @@ case "$VERB" in
       exit 14
     fi
     printf '%s\n' "$PANE"
+    ;;
+
+  brief)
+    SESSION="${2:?usage: roster.sh brief <session-dir> <name>}"
+    NAME="${3:?missing <name>}"
+    SESSION=$(cd "$SESSION" && pwd)
+    ROSTER=$(require_roster "$SESSION")
+    row=$(roster_row "$ROSTER" "$NAME")
+    if [ -z "$row" ]; then
+      echo "roster: no member named '$NAME' in $ROSTER" >&2
+      exit 1
+    fi
+    ROLE=$(printf '%s' "$row" | cut -f2)
+    AGENT_CMD=$(printf '%s' "$row" | cut -f3)
+    PANE=$("$SCRIPT_DIR/roster.sh" resolve "$SESSION" "$NAME") || exit $?
+
+    MEMBER_DIR="$SESSION/members/$NAME"
+    THINKER_PANE=$("$SCRIPT_DIR/session.sh" get "$SESSION" PRL_THINKER_PANE 2>/dev/null || echo unknown)
+
+    # Codex invokes skills with $name; Claude and AGY use /name.
+    case "$(basename "${AGENT_CMD%% *}")" in
+      codex) SKILL_PREFIX='$' ;;
+      *) SKILL_PREFIX='/' ;;
+    esac
+
+    if [ -s "$MEMBER_DIR/in" ]; then
+      first_step="Read $MEMBER_DIR/in and begin."
+    else
+      first_step="The thinker will write $MEMBER_DIR/in shortly; wait for it."
+    fi
+
+    role_upper=$(printf '%s' "$ROLE" | tr '[:lower:]' '[:upper:]')
+    brief="${SKILL_PREFIX}paired-review-loop You are the $role_upper named '$NAME'. Session dir: $SESSION. Your inbox is $MEMBER_DIR/in and you report in $MEMBER_DIR/out. Your pane is $PANE and the thinker's pane is $THINKER_PANE. $first_step"
+
+    # 2 means sent but unconfirmable — a mid-turn or very narrow pane — which is
+    # still sent. Only 1 is a real failure.
+    prl_send_verified "$PANE" "$brief"
+    send_status=$?
+    if [ "$send_status" -eq 1 ]; then
+      echo "roster: '$NAME' did not accept the briefing; look at pane $PANE" >&2
+      exit 13
+    fi
+    if [ "$send_status" -eq 2 ]; then
+      echo "roster: briefed '$NAME' but could not confirm it (${PRL_UNVERIFIED_REASON:-unverified})" >&2
+    fi
+    # Submitted is not the same as acted upon; press Enter again while the pane
+    # shows no sign of working. Only warn if it never stirs — a quick agent can
+    # answer inside the sample, and not every program visibly works.
+    prl_wait_until_working "$PANE" ||
+      echo "roster: '$NAME' took the briefing but showed no sign of working; check pane $PANE" >&2
+    echo "BRIEFED $NAME $PANE"
     ;;
 
   sync)

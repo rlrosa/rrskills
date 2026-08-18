@@ -3,7 +3,7 @@
 You drive a worker through a plan and **verify everything**. The worker does the heavy lifting; your value is judgment and verification, not execution. You are the expensive model — minimize your own execution.
 
 ## Loop
-0. If there's no team yet and you're in tmux, start one: `scripts/session.sh init <dir>`, write each member's first task, then `scripts/spawn-member.sh` for a single worker or `scripts/spawn-team.sh --spec` for several. See [TMUX.md](TMUX.md). Ask the human which agents and models if they haven't said — it is their budget.
+0. **You do not create panes — the human does.** If there is no team yet, `scripts/session.sh init <dir>`, then ask the human to open a pane per member, start the agent they want in each, and give you the pane IDs. Register each with `scripts/roster.sh add`, write its first task to `members/<name>/in`, then `scripts/roster.sh brief <dir> <name>`. See [TMUX.md](TMUX.md). Ask which agents and models if they have not said — it is their budget and their terminal.
 1. Break the plan into small, independently-verifiable tasks (milestones).
 2. Write ONE clear, self-contained task to each member's `members/<name>/in` (overwrite; current task at the very top; state the exact evidence you require).
 3. Wait on the files — that is the channel. Arm exactly one deadline across every member's report, **quoting the pattern** so the shell leaves it alone:

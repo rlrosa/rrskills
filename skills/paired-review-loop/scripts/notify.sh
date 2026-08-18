@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# notify.sh <pane-id> <message>
 # notify.sh --session <dir> --member <name> <message>
 # notify.sh --session <dir> --role <role> <message>
 #
-# Rings the doorbell on a teammate's tmux pane: types <message> into it and
-# presses Enter, so that agent wakes up and acts at once instead of waiting for
-# watch.sh to notice a file changed.
+# Pokes a member that has gone quiet: types <message> into its pane and presses
+# Enter, so it wakes up instead of waiting for its own deadline.
 #
-# Prefer --member over a raw pane ID. It looks the pane up in the roster and
-# then makes the pane confirm it really is that member before typing anything,
-# which is what stops a task landing in the wrong agent's terminal after panes
-# have been closed, reopened or reused.
+# **You can only reach members the human registered.** There is deliberately no
+# way to name a raw pane ID here. Every send resolves through the roster, and
+# the roster only contains panes a human created and handed over, so a pane
+# nobody registered is unreachable rather than merely discouraged. Resolving
+# also makes the pane confirm it really is that member before anything is
+# typed, which is what stops a message landing in the wrong terminal after
+# panes have been closed or reused.
 #
 # --role rings every member holding that role, e.g. all the testers. It reports
 # per member and exits non-zero if any of them could not be reached.
@@ -60,7 +61,6 @@ usage() {
 SESSION=""
 MEMBER=""
 ROLE=""
-PANE=""
 MSG=""
 FORCE=false
 
@@ -76,22 +76,20 @@ while [ $# -gt 0 ]; do
       usage 2
       ;;
     *)
-      if [ -z "$MEMBER" ] && [ -z "$ROLE" ] && [ -z "$PANE" ] && [ -z "$MSG" ]; then
-        PANE="$1"
-      else
-        MSG="$1"
-      fi
+      MSG="$1"
       shift
       ;;
   esac
 done
 
-if [ -n "$MEMBER" ] || [ -n "$ROLE" ]; then
-  # In the addressed forms the lone positional is the message, not a pane.
-  [ -z "$MSG" ] && MSG="$PANE" && PANE=""
-  [ -n "$SESSION" ] || { echo "notify: --session is required with --member/--role" >&2; exit 2; }
-  prl_assert_session_owner "$SESSION" || exit 4
+if [ -z "$MEMBER" ] && [ -z "$ROLE" ]; then
+  echo "notify: name who to poke with --member <name> or --role <role>." >&2
+  echo "notify: raw pane IDs are not accepted - a pane is only reachable once a" >&2
+  echo "notify: human has registered it with 'roster.sh add'." >&2
+  exit 2
 fi
+[ -n "$SESSION" ] || { echo "notify: --session is required" >&2; exit 2; }
+prl_assert_session_owner "$SESSION" || exit 4
 
 [ -n "$MSG" ] || usage 2
 
@@ -191,11 +189,7 @@ if [ -n "$ROLE" ]; then
     ring_member "$name" || worst=$?
   done <<< "$members"
   exit "$worst"
-elif [ -n "$MEMBER" ]; then
-  ring_member "$MEMBER"
-  exit $?
 else
-  [ -n "$PANE" ] || usage 2
-  ring_pane "$PANE" "$PANE"
+  ring_member "$MEMBER"
   exit $?
 fi

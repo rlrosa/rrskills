@@ -8,7 +8,7 @@ Every message between the thinker and a member is a file: the thinker writes `me
 
 tmux does two jobs, both of them the **thinker's**:
 
-1. **Starting the team** — `spawn-member.sh` / `spawn-team.sh`.
+1. **Briefing a member** the human already started — `roster.sh brief`.
 2. **Reaching a member that has stopped answering** — `notify.sh`, plus `roster.sh verify` to tell a working member from a stuck one.
 
 **Members never use it.** A member replies by writing its `out` file and waiting on its `in`. Typing at the thinker instead leaves no record, cannot be re-read, and is silently swallowed whenever the thinker happens to be mid-turn.
@@ -38,7 +38,7 @@ tester-1   tester   codex                          %181   /home/rrosa/repo
 tester-2   tester   agy --dangerously-skip-permissions %182 /home/rrosa/repo
 ```
 
-- `spawn-member.sh` and `spawn-team.sh` fill both in as they start each agent.
+- You fill both in: `session.sh register` for the thinker's own pane, `roster.sh add` for each member's.
 - Started by hand? The thinker runs `scripts/session.sh register <dir> thinker`; each member runs `scripts/roster.sh add <dir> <name> <role> $TMUX_PANE $PWD '<agent>'`.
 - Read one field with `scripts/roster.sh get <dir> worker pane`.
 
@@ -149,85 +149,52 @@ tester-1     tester-1   22m    WAITING   frozen with its task unanswered
 
 Then act on what it says: re-ring whoever owes, or — if it says *you* owe the next task — write it. After two unanswered nudges for the same round, stop nudging and tell the human which member is stuck and for how long.
 
-## Spawning one member
+## Setting the team up
+
+**You create the panes. The skill never does.**
+
+It has no way to: nothing in `scripts/` can split a window, open one, close one or resize anything. The only tmux verbs left are reading pane state, tagging a pane, and typing into one. So a session can only ever touch panes you handed it, and it cannot rearrange the terminal you are working in.
+
+The setup is three steps, and only the middle one is the skill's.
+
+**1. You make the panes and start the agents.** However you like — splits, windows, separate sessions, whatever suits your layout. Start each agent with the model and permission flags you want. Note each pane's ID:
 
 ```
-scripts/spawn-member.sh --session /tmp/prl-demo --name worker --role worker \
-  --cmd 'claude --model claude-sonnet-5' --cwd /path/to/repo
+tmux list-panes -a -F '#{pane_id} #{pane_current_command} #{pane_current_path}'
 ```
 
-`--cmd` is passed through verbatim, so it carries whatever model and permission flags you want:
-`'claude'`, `'codex'`, `'agy --dangerously-skip-permissions'`.
-
-Add `--layout below` to stack the pane under the thinker instead of beside it, and `--size 30` to give it less of the split.
-
-**Write `<session>/members/<name>/in` before spawning.** The bootstrap message then points the member straight at its first task and it starts without a further nudge. If the file is missing, the member is told to wait instead — an agent pointed at a file that does not exist will improvise, which is what the protocol exists to prevent.
-
-## Spawning a whole team
+**2. Register each one, then brief it.** Registering is what puts a pane on the allowlist; nothing outside the roster is reachable.
 
 ```
-scripts/spawn-team.sh --session /tmp/prl-demo --spec team.txt --cwd /path/to/repo
+scripts/session.sh init /tmp/prl-demo
+scripts/session.sh register /tmp/prl-demo thinker      # the thinker's own pane
+
+scripts/roster.sh add   /tmp/prl-demo worker   worker %180 /path/to/repo 'claude --model claude-sonnet-5'
+scripts/roster.sh add   /tmp/prl-demo tester-1 tester %181 /path/to/repo 'codex'
+
+scripts/roster.sh brief /tmp/prl-demo worker
+scripts/roster.sh brief /tmp/prl-demo tester-1
 ```
 
-```
-# name      role     agent
-worker      worker   claude --model claude-sonnet-5
-tester-1    tester   codex
-tester-2    tester   agy --dangerously-skip-permissions
-```
+`brief` types one line into that member's pane telling it its role, its name, its mailbox paths and the thinker's pane, then confirms the agent actually started working. Write `<session>/members/<name>/in` **before** briefing and the member goes straight to work; leave it empty and it is told to wait instead, because an agent pointed at a file that does not exist will improvise.
 
-Everything after the role is the agent command, so it may contain flags and spaces. `-` as the spec reads it from stdin.
-
-The team lands beside the thinker, in its window:
-
-```
-┌─ window ───────────┬──────────────┐
-│                    │  worker      │
-│                    ├──────────────┤
-│   thinker  %174    │  tester-1    │
-│                    ├──────────────┤
-│                    │  tester-2    │
-└────────────────────┴──────────────┘
-```
-
-**The thinker's pane is split exactly once, ever.** The first member takes half of it side by side; every member after that subdivides the members' half instead, and they are evened up after each addition. Halving the thinker's pane per member is what once reduced it to a single column — still alive, still looking reachable, and unable to receive a single nudge.
-
-Each spawn waits for its own agent to become interactive, so later members start up while earlier ones are still being bootstrapped — three stand-in members came up in under 10s.
-
-Members stack in whichever order kept them evenly sized, not in spawn order, so each pane's title is set to its member name. Add `#{pane_title}` to your `pane-border-format` to see who is who at a glance.
-
-If the window is genuinely too cramped to divide — under 40 columns across or 10 rows down — that member gets its own window rather than a sliver, and says so.
-
-Past **6 members** it warns: tiled panes stop being readable, and every member spends tokens every round. It is a warning, not a refusal — your terminal, your budget.
-
-If a member fails to start, the ones already up are left running. `scripts/roster.sh verify` tells you where you got to.
-
-What a spawn does, step by step:
-
-1. Opens the pane, falling back to a new window automatically when the window is too small to divide.
-
-   `--layout` is named after the resulting geometry, not tmux's `-h`/`-v`, which read backwards to most people:
-
-   | `--layout` | Result | Aliases |
-   | --- | --- | --- |
-   | `right` | Side by side, on the right. Default. | `split`, `horizontal`, `h` |
-   | `below` | Stacked, underneath. | `vertical`, `v` |
-   | `window` | A new window of its own. | |
-
-   `--size <n>` sets the new pane's share of the split as a percentage, 1–99 (default 50). A tall terminal suits `below`; a wide one suits `right`. `--into <pane-id>` splits a pane other than the thinker's, which is how `spawn-team.sh` gathers everyone into one window.
-2. Records the member in `roster.tsv` and tags the pane with its identity — **before** launching the agent, so a member whose agent then fails to start still shows up in `roster.sh verify` instead of becoming an untracked pane.
-3. Starts the pane on a plain shell and types the agent command into it, so the pane survives the agent exiting and you can still read the failure.
-4. Waits for the agent to replace the shell as the pane's foreground command, then for the pane to stop redrawing. Both matter: an agent is the foreground command seconds before its TUI will accept a keystroke.
-5. Sends one bootstrap line invoking this skill and naming the role, the name, the mailbox and both pane IDs, retrying until the pane confirms it took the message:
-
-   ```
-   /paired-review-loop You are the TESTER named 'tester-1'. Session dir: /tmp/prl-demo. Your inbox is /tmp/prl-demo/members/tester-1/in and you report in /tmp/prl-demo/members/tester-1/out. Your pane is %181 and the thinker's pane is %174. Read /tmp/prl-demo/members/tester-1/in and begin.
-   ```
-
-   The prefix follows the CLI: `/` for Claude and AGY, `$` for Codex, inferred from `--cmd` and overridable with `--skill-prefix`.
-6. Prints the member's pane ID.
+**3. From then on the thinker only reads files, pokes registered members, and writes tasks.**
 
 Every member's CLI must already have this skill installed — `./install.sh` from the repo root does that for Claude, AGY and Codex.
+
+### What the thinker can and cannot do
+
+| Can | Cannot |
+| --- | --- |
+| Read any pane's state (`roster.sh verify`) | Create a pane or window |
+| Type into a **registered** member's pane | Close or resize anything |
+| Tag a registered pane with its identity | Reach a pane that is not in the roster |
+
+`notify.sh` takes no pane-ID argument at all — only `--member` and `--role` — so an unregistered pane is unreachable rather than merely discouraged.
+
+### When a member has to be replaced
+
+You do that too. Stand the old member down in its `in` first, then kill and recreate the pane yourself, `roster.sh add` the new pane under the same name, and `roster.sh brief` it. `roster.sh verify` will report the old row as `GONE` in between, which is the intended signal rather than something to fix silently.
 
 ## Telling a thinking member from a hung one
 

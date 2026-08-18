@@ -9,7 +9,6 @@ const scriptsDir = path.join(repoRoot, 'skills', 'paired-review-loop', 'scripts'
 const notify = path.join(scriptsDir, 'notify.sh');
 const watch = path.join(scriptsDir, 'watch.sh');
 const session = path.join(scriptsDir, 'session.sh');
-const spawnMember = path.join(scriptsDir, 'spawn-member.sh');
 
 function hasTmux() {
   try {
@@ -91,23 +90,31 @@ try {
   const thinkerPane = tmux(['list-panes', '-a', '-F', '#{pane_id}']).split('\n')[0];
   testEnv = { ...process.env, TMUX: `${socketPath},0,0`, TMUX_PANE: thinkerPane };
 
+  // notify only addresses registered members now, so every case below needs a
+  // session with this pane in it.
+  const notifyDir = path.join(tmpDir, 'prl-notify');
+  const roster = path.join(scriptsDir, 'roster.sh');
+  runScript(session, ['init', notifyDir]);
+  runScript(roster, ['add', notifyDir, 'peer', 'worker', thinkerPane, tmpDir, 'bash']);
+  const toPeer = (message) => ['--session', notifyDir, '--member', 'peer', message];
+
   console.log('Running test 1: notify reports no reachable tmux server...');
-  const noServer = runScript(notify, [thinkerPane, 'prl: hi'], {
+  const noServer = runScript(notify, toPeer('prl: hi'), {
     TMUX: path.join(tmpDir, 'no-such-socket') + ',0,0',
   });
   assert.strictEqual(noServer.code, 10, 'unreachable server should exit 10');
   assert(noServer.stderr.includes('watch.sh'), 'should point the caller at the fallback');
 
-  console.log('Running test 2: notify rejects an unknown pane...');
-  const noPane = runScript(notify, ['%99999', 'prl: hi']);
-  assert.strictEqual(noPane.code, 11, 'unknown pane should exit 11');
+  console.log('Running test 2: notify rejects a member it does not know...');
+  const noPane = runScript(notify, ['--session', notifyDir, '--member', 'nobody', 'prl: hi']);
+  assert.strictEqual(noPane.code, 1, 'an unregistered member should be rejected');
 
   console.log('Running test 3: notify refuses to type into a shell prompt...');
   // The pane is a bare shell, so a message that reaches it would be executed.
   // Send one that leaves a trace on disk, and prove no trace appears.
   const marker = path.join(tmpDir, 'guard-marker');
   assert.strictEqual(paneCommand(thinkerPane), 'bash', 'pane should be at a shell for this test');
-  const guarded = runScript(notify, [thinkerPane, `touch ${marker}`]);
+  const guarded = runScript(notify, toPeer(`touch ${marker}`));
   assert.strictEqual(guarded.code, 12, 'shell prompt should exit 12');
   execFileSync('sleep', ['1']);
   assert(!fs.existsSync(marker), 'notify must not let a shell execute the message');
@@ -117,7 +124,7 @@ try {
   );
 
   console.log('Running test 4: notify rejects a multi-line message...');
-  const multiline = runScript(notify, [thinkerPane, 'first line\nsecond line']);
+  const multiline = runScript(notify, toPeer('first line\nsecond line'));
   assert.strictEqual(multiline.code, 2, 'multi-line message should exit 2');
 
   console.log('Running test 5: notify delivers to a live pane...');
@@ -127,7 +134,7 @@ try {
   tmux(['send-keys', '-t', thinkerPane, 'Enter']);
   waitForPaneCommand(thinkerPane, 'cat');
   const message = 'prl: inbox updated - read /tmp/prl-demo/members/worker/in';
-  const delivered = runScript(notify, [thinkerPane, message]);
+  const delivered = runScript(notify, toPeer(message));
   assert.strictEqual(delivered.code, 0, `delivery should exit 0, got ${delivered.code} ${delivered.stderr}`);
   assert(delivered.stdout.includes('DELIVERED'), 'should report delivery');
   assert(
@@ -158,132 +165,7 @@ try {
     'get should exit 1 for an unset key'
   );
 
-  console.log('Running test 7: spawn-member creates and bootstraps a pane...');
-  const spawnDir = path.join(tmpDir, 'prl-spawn');
-  fs.mkdirSync(spawnDir, { recursive: true });
-  fs.mkdirSync(path.join(spawnDir, 'members', 'worker'), { recursive: true });
-  fs.writeFileSync(path.join(spawnDir, 'members', 'worker', 'in'), 'TASK: prove you are alive\n');
-  const spawned = runScript(spawnMember, [
-    '--session', spawnDir,
-    '--name', 'worker',
-    '--cmd', 'cat',
-    '--cwd', tmpDir,
-  ]);
-  assert.strictEqual(spawned.code, 0, `spawn should succeed, got ${spawned.code} ${spawned.stderr}`);
-  const workerPane = spawned.stdout.trim();
-  assert(/^%\d+$/.test(workerPane), `spawn should print a pane id, got '${workerPane}'`);
-  assert.notStrictEqual(workerPane, thinkerPane, 'the worker must get its own pane');
-  assert.strictEqual(paneCommand(workerPane), 'cat', 'the agent command should be running');
-
-  const spawnEnv = fs.readFileSync(path.join(spawnDir, 'session.env'), 'utf8');
-  assert(spawnEnv.includes(`PRL_THINKER_PANE='${thinkerPane}'`), 'session.env should record the thinker pane');
-
-  // Members live in the roster, not session.env, and the pane carries the same
-  // facts so the two can be checked against each other.
-  const spawnRoster = fs.readFileSync(path.join(spawnDir, 'roster.tsv'), 'utf8');
-  assert(
-    spawnRoster.includes(['worker', 'worker', 'cat', workerPane].join('\t')),
-    `roster should record the member, got: ${spawnRoster}`
-  );
-  assert.strictEqual(
-    tmux(['display-message', '-p', '-t', workerPane, '#{@prl_member}']),
-    'worker',
-    'the pane should be tagged with the member name'
-  );
-
-  // Strip the newlines the terminal inserts when it wraps the long bootstrap
-  // line, so the text can be matched as it was written.
-  const bootstrap = tmux(['capture-pane', '-p', '-t', workerPane]).replace(/\n/g, '');
-  assert(bootstrap.includes('/paired-review-loop'), 'bootstrap should invoke the skill');
-  assert(bootstrap.includes('You are the WORKER'), 'bootstrap should name the role');
-  assert(
-    bootstrap.includes(path.join(spawnDir, 'members', 'worker', 'in')),
-    'bootstrap should point at the first task'
-  );
-
-  // Typed is not the same as sent. A TUI that is still starting up echoes the
-  // characters but drops the Enter, leaving the bootstrap parked in the input
-  // box and the worker sitting there with no role. `cat` prints back each line
-  // it receives, so a second copy on screen is proof the Enter took effect.
-  const bootstrapCopies = bootstrap.split('You are the WORKER').length - 1;
-  assert(
-    bootstrapCopies >= 2,
-    `bootstrap should be submitted, not left in the input box (saw ${bootstrapCopies} copies)`
-  );
-
-  console.log('Running test 8: spawn-member honours the layout orientation...');
-  // Check the geometry rather than trusting the flag was passed. tmux names a
-  // side-by-side split "horizontal" and a stacked one "vertical", so a wired-up
-  // -h/-v mix-up would still spawn a pane and still look like it worked.
-  const paneGeometry = (pane) => {
-    const [left, top] = tmux([
-      'display-message', '-p', '-t', pane, '#{pane_left} #{pane_top}',
-    ]).split(' ').map(Number);
-    return { left, top };
-  };
-
-  // Read the thinker's position after each split, never before. A split can
-  // move the original pane too — a configured pane border takes a row from
-  // both — so a position measured beforehand is about a layout that no longer
-  // exists.
-  //
-  // Each case gets a window of its own, wide enough that spawn-member's
-  // minimum-width guard has no reason to divert the member to a new window.
-  // Sharing the crowded test window would leave a pane too cramped to halve,
-  // and the orientation being tested here would never be exercised.
-  const spawnAndCompare = (dirName, layout) => {
-    const sessionDir = path.join(tmpDir, dirName);
-    const host = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
-    const pane = runScript(
-      spawnMember,
-      ['--session', sessionDir, '--name', 'worker', '--cmd', 'cat', '--layout', layout, '--no-bootstrap'],
-      { TMUX_PANE: host }
-    ).stdout.trim();
-    assert(/^%\d+$/.test(pane), `--layout ${layout} should print a pane id, got '${pane}'`);
-    assert.strictEqual(
-      tmux(['display-message', '-p', '-t', pane, '#{window_id}']),
-      tmux(['display-message', '-p', '-t', host, '#{window_id}']),
-      `--layout ${layout} should have split the window, not opened a new one`
-    );
-    const geometry = { worker: paneGeometry(pane), thinker: paneGeometry(host) };
-    tmux(['kill-window', '-t', host]);
-    return geometry;
-  };
-
-  const side = spawnAndCompare('prl-right', 'right');
-  assert(side.worker.left > side.thinker.left, 'a "right" split should put the worker beside the thinker');
-  assert.strictEqual(side.worker.top, side.thinker.top, 'a "right" split should not stack the panes');
-
-  const stacked = spawnAndCompare('prl-below', 'below');
-  assert(stacked.worker.top > stacked.thinker.top, 'a "below" split should put the worker under the thinker');
-  assert.strictEqual(
-    stacked.worker.left,
-    stacked.thinker.left,
-    'a "below" split should not put the panes side by side'
-  );
-
-  const belowDir = path.join(tmpDir, 'prl-below');
-
-  assert.strictEqual(
-    runScript(spawnMember, ['--session', belowDir, '--name', 'worker', '--cmd', 'cat', '--layout', 'sideways']).code,
-    2,
-    'an unknown layout should be rejected'
-  );
-  assert.strictEqual(
-    runScript(spawnMember, ['--session', belowDir, '--name', 'worker', '--cmd', 'cat', '--size', '250']).code,
-    2,
-    'an out-of-range size should be rejected'
-  );
-
-  console.log('Running test 9: spawn-member tells a member to wait when there is no task yet...');
-  const emptyDir = path.join(tmpDir, 'prl-empty');
-  const spawnedEmpty = runScript(spawnMember, ['--session', emptyDir, '--name', 'worker', '--cmd', 'cat', '--layout', 'window']);
-  assert.strictEqual(spawnedEmpty.code, 0, `spawn should succeed, got ${spawnedEmpty.stderr}`);
-  const emptyPane = spawnedEmpty.stdout.trim();
-  const waitText = tmux(['capture-pane', '-p', '-t', emptyPane]).replace(/\n/g, '');
-  assert(waitText.includes('wait for its nudge'), 'a worker with no task must be told to wait');
-
-  console.log('Running test 10: watch.sh blocks until the file changes...');
+  console.log('Running test 7: watch.sh blocks until the file changes...');
   // Everything here runs synchronously in the foreground. Polling a spawned
   // child from this thread would not work: execFileSync blocks the event loop,
   // so the child's exit event could never be delivered while we waited for it.

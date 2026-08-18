@@ -6,7 +6,7 @@ Current version: **0.4.0** (see `VERSION`). Released versions are git tags, `v<v
 
 ## Skills Included
 
-- **`paired-review-loop`**: File-based review & verification loop where a thinker (reviewer/orchestrator) drives a team — a worker that implements, plus optional testers that run things and capture evidence — verifying all proof before accepting. Under tmux the thinker spawns each member's pane with the agent and model you choose (`claude --model ...`, `codex`, `agy ...`), they wake each other instantly via `tmux send-keys` instead of polling, and each pane is tagged with its identity so a stale roster can never send a task to the wrong agent.
+- **`paired-review-loop`**: File-based review & verification loop where a thinker (reviewer/orchestrator) drives a team — a worker that implements, plus optional testers that run things and capture evidence — verifying all proof before accepting. Members exchange plain files. Under tmux **you** create each member's pane and hand over its ID; the skill cannot create, close or resize panes, and can only reach panes you registered. Each registered pane is tagged with its identity, so a stale roster can never send a task to the wrong agent.
 
 ## Easy Skill Installer (`install.sh`)
 

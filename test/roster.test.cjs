@@ -8,9 +8,7 @@ const scriptsDir = path.join(repoRoot, 'skills', 'paired-review-loop', 'scripts'
 const roster = path.join(scriptsDir, 'roster.sh');
 const notify = path.join(scriptsDir, 'notify.sh');
 const watch = path.join(scriptsDir, 'watch.sh');
-const spawnTeam = path.join(scriptsDir, 'spawn-team.sh');
 const status = path.join(scriptsDir, 'status.sh');
-const spawnMember = path.join(scriptsDir, 'spawn-member.sh');
 
 function hasTmux() {
   try {
@@ -174,59 +172,42 @@ try {
   );
   tmux(['set-option', '-p', '-t', paneB, '@prl_member', 'tester-1']);
 
-  console.log('Running test 6: spawn-team keeps the team beside the thinker...');
+  console.log('Running test 6: a human-created pane is registered and briefed...');
+  // The skill no longer makes panes. The human makes one, hands over its ID,
+  // and registering it is what puts it within reach at all.
   const teamDir = path.join(tmpDir, 'prl-team');
-  const spec = path.join(tmpDir, 'team.txt');
-  fs.writeFileSync(
-    spec,
-    '# name      role     agent\nworker      worker   cat\ntester-1    tester   cat\ntester-2    tester   cat\n'
-  );
-  // A window of its own, wide enough that the minimum-width guard has no reason
-  // to divert anyone. In the crowded shared window the thinker's pane is too
-  // narrow to halve, so the layout under test would never be exercised.
+  runScript(roster, ['init', teamDir]);
+  // A window of its own, so the panes are wide enough to read back what was
+  // typed into them. In the crowded shared window they end up a few columns
+  // across, and the briefing is then unverifiable rather than absent.
   const teamHost = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
-  const hostWindow = tmux(['display-message', '-p', '-t', teamHost, '#{window_id}']);
-  const thinkerWidthBefore = Number(tmux(['display-message', '-p', '-t', teamHost, '#{pane_width}']));
-
-  const team = runScript(
-    spawnTeam,
-    ['--session', teamDir, '--spec', spec, '--cwd', tmpDir],
-    { TMUX_PANE: teamHost }
-  );
-  assert.strictEqual(team.code, 0, `spawn-team should succeed: ${team.stderr}`);
-
-  const spawned = team.stdout.trim().split('\n').map((line) => line.split('\t'));
-  assert.strictEqual(spawned.length, 3, 'every member in the spec should be spawned');
-  for (const [name, pane] of spawned) {
+  const handedOver = {};
+  for (const [name, role] of [['worker', 'worker'], ['tester-1', 'tester'], ['tester-2', 'tester']]) {
+    const pane = tmux(['split-window', '-d', '-t', teamHost, '-P', '-F', '#{pane_id}']);
+    tmux(['send-keys', '-t', pane, '-l', 'cat']);
+    tmux(['send-keys', '-t', pane, 'Enter']);
+    handedOver[name] = pane;
+    const added = runScript(roster, ['add', teamDir, name, role, pane, tmpDir, 'cat']);
+    assert.strictEqual(added.code, 0, `registering ${name} should succeed: ${added.stderr}`);
     assert.strictEqual(paneTag(pane, 'prl_member'), name, `${name}'s pane should be tagged`);
     assert.strictEqual(paneTag(pane, 'prl_session'), teamDir, `${name} should be tagged for this session`);
-    assert.strictEqual(
-      tmux(['display-message', '-p', '-t', pane, '#{window_id}']),
-      hostWindow,
-      `${name} should sit beside the thinker, not scatter to its own window`
-    );
   }
-
-  // The property this layout exists for: the thinker's pane is split once for
-  // the first member and never touched again, however many members follow.
-  // Halving it per member is what reduced one to a single column.
-  const thinkerWidthAfter = Number(tmux(['display-message', '-p', '-t', teamHost, '#{pane_width}']));
-  assert(
-    thinkerWidthAfter >= Math.floor(thinkerWidthBefore / 2) - 2,
-    `the thinker kept ${thinkerWidthAfter} of ${thinkerWidthBefore} columns; it should lose only the one split`
-  );
-  const memberColumns = spawned.map(([, pane]) =>
-    Number(tmux(['display-message', '-p', '-t', pane, '#{pane_left}'])));
-  assert.strictEqual(
-    new Set(memberColumns).size,
-    1,
-    'members should stack in one column beside the thinker, not subdivide sideways'
-  );
-
+  execFileSync('sleep', ['1']);
   assert.strictEqual(
     runScript(roster, ['list', teamDir]).stdout.trim().split('\n').length,
     3,
-    'the roster should list the whole team'
+    'the roster should list every registered member'
+  );
+
+  // Briefing types the role into the pane the human handed over.
+  fs.writeFileSync(path.join(teamDir, 'members', 'worker', 'in'), 'TASK: prove you are alive\n');
+  const briefed = runScript(roster, ['brief', teamDir, 'worker']);
+  assert.strictEqual(briefed.code, 0, `brief should succeed: ${briefed.stderr}`);
+  const briefText = tmux(['capture-pane', '-p', '-t', handedOver.worker]).replace(/\n/g, '');
+  assert(briefText.includes('You are the WORKER'), 'the briefing should name the role');
+  assert(
+    briefText.includes(path.join(teamDir, 'members', 'worker', 'in')),
+    'the briefing should point at the first task'
   );
 
   console.log('Running test 7: --role rings every tester and no one else...');
@@ -415,7 +396,13 @@ try {
   const narrowWidth = Number(tmux(['display-message', '-p', '-t', narrowPane, '#{pane_width}']));
   assert(narrowWidth < 40, `the pane must actually be narrow for this test, got ${narrowWidth}`);
 
-  const narrowSend = runScript(notify, [narrowPane, 'prl: narrow probe']);
+  // Register it, because that is now the only way a pane can be addressed.
+  const narrowDir = path.join(tmpDir, 'prl-narrow');
+  runScript(roster, ['init', narrowDir]);
+  runScript(roster, ['add', narrowDir, 'squeezed', 'tester', narrowPane, tmpDir, 'cat']);
+  const narrowSend = runScript(notify, [
+    '--session', narrowDir, '--member', 'squeezed', 'prl: narrow probe',
+  ]);
   assert.strictEqual(narrowSend.code, 0, 'a narrow pane should still be sent to, not abandoned');
   assert(
     /columns wide/.test(narrowSend.stdout),
@@ -427,35 +414,45 @@ try {
   );
   tmux(['kill-window', '-t', narrowHost]);
 
-  console.log('Running test 14: a split that would strand an agent opens a window instead...');
-  // The cause of the one-column pane was a split, so the fix has to be refusing
-  // the split rather than only reporting the symptom afterwards.
-  const squeezeDir = path.join(tmpDir, 'prl-squeeze');
-  // Again in its own window, so the pane really is as cramped as the test says.
-  const squeezeHost = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
-  tmux(['split-window', '-h', '-d', '-t', squeezeHost]);
-  tmux(['resize-pane', '-t', squeezeHost, '-x', '60']);
+  console.log('Running test 14: no script can create, destroy or reshape a pane...');
+  // A structural guarantee rather than a behavioural one. The rule is that the
+  // human owns the terminal layout, so the check is that the capability is
+  // simply absent from the source — no test of behaviour can prove that a
+  // script will never split a window, but grepping for the verbs can.
+  const forbidden = [
+    'split-window', 'new-window', 'new-session',
+    'kill-pane', 'kill-window', 'kill-server',
+    'resize-pane', 'select-layout', 'break-pane', 'join-pane', 'swap-pane',
+  ];
+  for (const script of fs.readdirSync(scriptsDir).filter((f) => f.endsWith('.sh'))) {
+    const body = fs.readFileSync(path.join(scriptsDir, script), 'utf8');
+    for (const verb of forbidden) {
+      assert(
+        !body.includes(`tmux ${verb}`),
+        `${script} must not be able to run 'tmux ${verb}' - the human owns the pane layout`
+      );
+    }
+  }
+
+  console.log('Running test 15: an unregistered pane cannot be reached at all...');
+  const strangerPane = tmux(['split-window', '-d', '-t', thinkerPane, '-P', '-F', '#{pane_id}']);
+  tmux(['send-keys', '-t', strangerPane, '-l', 'cat']);
+  tmux(['send-keys', '-t', strangerPane, 'Enter']);
   execFileSync('sleep', ['1']);
-  const cramped = Number(tmux(['display-message', '-p', '-t', squeezeHost, '#{pane_width}']));
-  assert(cramped < 80, `the pane must be too cramped to halve, got ${cramped}`);
 
-  const squeezed = runScript(
-    spawnMember,
-    ['--session', squeezeDir, '--name', 'worker', '--cmd', 'cat', '--no-bootstrap'],
-    { TMUX_PANE: squeezeHost }
-  );
-  assert.strictEqual(squeezed.code, 0, `spawn should still succeed: ${squeezed.stderr}`);
-  assert(/under the \d+ needed/.test(squeezed.stderr), `it should explain the refusal: ${squeezed.stderr}`);
+  // There is no argument that names a raw pane, so this cannot even be asked.
+  const byPane = runScript(notify, [strangerPane, 'prl: MUST-NOT-ARRIVE']);
+  assert.strictEqual(byPane.code, 2, 'notify must not accept a bare pane ID');
+  assert(/roster\.sh add/.test(byPane.stderr), 'it should say registration is the only way in');
 
-  const squeezedPane = squeezed.stdout.trim();
-  const squeezedWidth = Number(tmux(['display-message', '-p', '-t', squeezedPane, '#{pane_width}']));
-  assert(squeezedWidth >= 40, `the member must land somewhere usable, got ${squeezedWidth} columns`);
-  assert.notStrictEqual(
-    tmux(['display-message', '-p', '-t', squeezedPane, '#{window_id}']),
-    tmux(['display-message', '-p', '-t', squeezeHost, '#{window_id}']),
-    'it should have gone to its own window rather than splitting a cramped one'
+  const byName = runScript(notify, ['--session', teamDir, '--member', 'stranger', 'prl: MUST-NOT-ARRIVE']);
+  assert.strictEqual(byName.code, 1, 'an unregistered name should be rejected');
+  execFileSync('sleep', ['1']);
+  assert(
+    !tmux(['capture-pane', '-p', '-t', strangerPane]).includes('MUST-NOT-ARRIVE'),
+    'nothing may reach a pane the human never registered'
   );
-  tmux(['kill-window', '-t', squeezeHost]);
+  tmux(['kill-pane', '-t', strangerPane]);
 
   console.log('All roster tests passed successfully!');
 } catch (err) {
