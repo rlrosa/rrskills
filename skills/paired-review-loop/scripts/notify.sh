@@ -102,8 +102,16 @@ case "$MSG" in
     ;;
 esac
 
-if ! prl_tmux_available; then
-  echo "notify: no tmux server reachable; use watch.sh instead" >&2
+if ! prl_tmux_diagnose; then
+  prl_tmux_explain notify
+  # Say this every time. A thinker that lost only its poke once concluded the
+  # session was blocked, stopped, and asked its human to fix tmux — when the
+  # task was already sitting in the member's inbox and would have been picked
+  # up on its own deadline.
+  echo "notify: this does NOT block the loop. The files are the channel, and the" >&2
+  echo "notify: task is already written; the member reads its inbox on its own" >&2
+  echo "notify: deadline. Poking only makes it happen sooner. Carry on, and say" >&2
+  echo "notify: something to the human only if that member then stays quiet." >&2
   exit 10
 fi
 

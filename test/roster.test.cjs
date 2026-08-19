@@ -454,6 +454,41 @@ try {
   );
   tmux(['kill-pane', '-t', strangerPane]);
 
+  console.log('Running test 16: an unreachable tmux says WHY, and says to carry on...');
+  // Told only "no tmux server reachable", a thinker stopped a session and asked
+  // its human to restore tmux — while tmux was running and the real error was
+  // a sandbox refusing the socket. Both halves of that mistake are tested: the
+  // reason has to be named, and the loop has to be described as still fine.
+  const blockedSocket = path.join(tmpDir, 'blocked.sock');
+  execFileSync('python3', ['-c',
+    `import socket, os\ns = socket.socket(socket.AF_UNIX)\ns.bind(${JSON.stringify(blockedSocket)})\ns.listen(1)\nos.chmod(${JSON.stringify(blockedSocket)}, 0)`]);
+
+  const sandboxed = runScript(notify, ['--session', teamDir, '--member', 'worker', 'prl: hi'], {
+    TMUX: `${blockedSocket},0,0`,
+  });
+  assert.strictEqual(sandboxed.code, 10, 'an unreachable tmux should exit 10');
+  assert(/sandbox/i.test(sandboxed.stderr), `it should name the sandbox: ${sandboxed.stderr}`);
+  assert(
+    /IS running/.test(sandboxed.stderr),
+    'it should say tmux is running, so nobody goes off restarting it'
+  );
+  assert(
+    /does NOT block the loop/.test(sandboxed.stderr),
+    'it must say the session can continue without the poke'
+  );
+  fs.rmSync(blockedSocket, { force: true });
+
+  // A genuinely absent server must read differently, or the diagnosis is
+  // decorative.
+  const noServer = runScript(notify, ['--session', teamDir, '--member', 'worker', 'prl: hi'], {
+    TMUX: `${path.join(tmpDir, 'nothing-here')},0,0`,
+  });
+  assert.strictEqual(noServer.code, 10, 'a missing server should also exit 10');
+  assert(
+    /no tmux server is running/.test(noServer.stderr),
+    `a missing server should not be reported as a sandbox: ${noServer.stderr}`
+  );
+
   console.log('All roster tests passed successfully!');
 } catch (err) {
   cleanup();

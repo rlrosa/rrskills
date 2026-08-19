@@ -103,7 +103,12 @@ try {
     TMUX: path.join(tmpDir, 'no-such-socket') + ',0,0',
   });
   assert.strictEqual(noServer.code, 10, 'unreachable server should exit 10');
-  assert(noServer.stderr.includes('watch.sh'), 'should point the caller at the fallback');
+  // It used to suggest watch.sh, which is a wait and cannot deliver anything.
+  // What a caller needs to hear is why, and that the loop carries on regardless.
+  assert(
+    /does NOT block the loop/.test(noServer.stderr),
+    `it should say the session continues without the poke: ${noServer.stderr}`
+  );
 
   console.log('Running test 2: notify rejects a member it does not know...');
   const noPane = runScript(notify, ['--session', notifyDir, '--member', 'nobody', 'prl: hi']);

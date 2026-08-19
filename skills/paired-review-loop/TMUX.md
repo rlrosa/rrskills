@@ -90,7 +90,7 @@ prl: worker reported - round 3 + evidence/04-*.txt
 | Code | Meaning | What to do |
 | --- | --- | --- |
 | `0` | Sent. `ACCEPTED` = it is working now; `DELIVERED` = keys landed but it went idle; `QUEUED` = could not be confirmed | Watch its `out` file, not this line. |
-| `10` | No tmux server reachable | Fall back to `scripts/watch.sh` on the counterpart's file. |
+| `10` | tmux unreachable | Read which of the three reasons it printed. **Carry on either way** — the task is already in the file. |
 | `11` | No such pane | The counterpart is gone. Tell the human. |
 | `12` | Pane is at a shell prompt | Its agent has exited. Nothing was sent. Tell the human; do not retry. |
 | `13` | Keys sent, pane did not react | Treat as unreliable: arm a watcher as well, and say so. |
@@ -107,6 +107,14 @@ Three of these stop a send rather than report one, and all fail *before* typing 
 With `--role`, each member is reported separately and the exit code is the worst one seen, so one dead tester does not hide the others succeeding.
 
 A delivered nudge proves the keystrokes landed, not that the recipient understood them. Only its reply on its own file proves that.
+
+### Losing the poke does not block the loop
+
+This is worth being emphatic about, because getting it wrong wastes a whole session.
+
+`notify.sh` is an **optimisation**. It makes a member notice its inbox in seconds instead of on its own deadline. If it fails — any exit code, any reason — the task is still written, the member is still watching its inbox, and it will still pick the work up.
+
+So when a poke fails: note it, carry on, and raise it with the human only if that member then stays quiet past its deadline. Stopping the session to have tmux repaired trades a few minutes of latency for however long it takes the human to notice you are waiting.
 
 ## Waiting
 
@@ -226,7 +234,9 @@ If a nudge appears stuck in a codex pane, leave the keyboard alone and let its o
 
 ## When it does not work
 
-- **Exit 10 from inside a pane you can see.** A sandboxed agent gets no route to the tmux socket even when it is running in tmux — Codex's workspace sandbox behaves this way. Re-run the notify outside the sandbox; the escalation is what the exit code is telling you to do.
+- **Exit 10 saying "sandboxed", from inside a pane you can see.** Your command sandbox will not open the tmux socket, even though tmux is running and the socket is right there. Codex's workspace sandbox does this. Re-run the same command with the sandbox off or with escalated permissions.
+
+  **Do not ask the human to restart or "expose" tmux.** One thinker did exactly that — reported the server unreachable, stopped, and waited — while tmux was running normally the whole time and the true error was `Operation not permitted` on the socket. `notify.sh` now prints tmux's own words and names the socket so this is not guessable.
 - **Nudges land but nothing happens.** The counterpart is mid-turn; its harness queues the message. Wait a round before re-sending.
 - **Exit 12 right after spawning.** The agent exited on startup. Look at the pane — it is still there on purpose — and check the command and its permission flags.
 - **Spawn times out.** The agent never came up within 60s. The pane ID is printed anyway; go look at it. Raise the limit with `PRL_SPAWN_TIMEOUT` on a cold start.

@@ -66,6 +66,87 @@ prl_tmux_available() {
   tmux list-panes -a -F '#{pane_id}' > /dev/null 2>&1
 }
 
+# Where this process would look for a tmux server.
+prl_tmux_socket_path() {
+  if [ -n "${TMUX:-}" ]; then
+    printf '%s' "${TMUX%%,*}"
+  else
+    printf '/tmp/tmux-%s/default' "$(id -u 2>/dev/null)"
+  fi
+}
+
+# Work out WHY tmux cannot be reached, into PRL_TMUX_PROBLEM:
+#   (empty)      reachable
+#   no-tmux      the binary is not installed
+#   sandboxed    a socket is there, but this process may not open it
+#   no-server    nothing is running
+#   unreachable  something else; PRL_TMUX_DETAIL carries tmux's own words
+#
+# Worth the trouble because collapsing all of these into one message sent a
+# thinker badly wrong: told only "no tmux server reachable", it stopped the
+# session and asked its human to restore tmux, when tmux was running fine and
+# the real error was `Operation not permitted` on the socket — its own command
+# sandbox. The remedy for that is to re-run with the sandbox off, which is the
+# opposite of what it did.
+prl_tmux_diagnose() {
+  PRL_TMUX_PROBLEM=""
+  PRL_TMUX_DETAIL=""
+  if ! command -v tmux > /dev/null 2>&1; then
+    PRL_TMUX_PROBLEM="no-tmux"
+    return 1
+  fi
+  # Keep tmux's complaint instead of discarding it; it is the whole diagnosis.
+  PRL_TMUX_DETAIL=$(tmux list-panes -a -F '#{pane_id}' 2>&1 > /dev/null) && return 0
+
+  case "$PRL_TMUX_DETAIL" in
+    *'Operation not permitted'* | *'Permission denied'* | *'permission denied'*)
+      PRL_TMUX_PROBLEM="sandboxed"
+      ;;
+    *'no server running'*)
+      PRL_TMUX_PROBLEM="no-server"
+      ;;
+    *)
+      # A socket that exists while we cannot connect is a permissions problem
+      # however tmux worded it. Only if there is no socket at all is "nothing is
+      # running" the honest answer.
+      if [ -S "$(prl_tmux_socket_path)" ]; then
+        PRL_TMUX_PROBLEM="sandboxed"
+      else
+        PRL_TMUX_PROBLEM="no-server"
+      fi
+      ;;
+  esac
+  return 1
+}
+
+# Print what to do about it, on stderr. <what> names the thing that could not be
+# done, so the advice reads in context.
+prl_tmux_explain() {
+  local what="$1" socket
+  socket=$(prl_tmux_socket_path)
+  case "$PRL_TMUX_PROBLEM" in
+    sandboxed)
+      echo "$what: tmux said: $PRL_TMUX_DETAIL" >&2
+      echo "$what: the socket $socket exists, so tmux IS running - this process is" >&2
+      echo "$what: simply not allowed to open it. That is your own command sandbox," >&2
+      echo "$what: not a broken or missing tmux." >&2
+      echo "$what: Re-run this same command with the sandbox off, or with escalated" >&2
+      echo "$what: permissions. Do NOT ask the human to restart or 'expose' tmux -" >&2
+      echo "$what: there is nothing wrong with it." >&2
+      ;;
+    no-server)
+      echo "$what: no tmux server is running ($socket is not there)." >&2
+      echo "$what: the human starts tmux and the panes; you cannot." >&2
+      ;;
+    no-tmux)
+      echo "$what: tmux is not installed here." >&2
+      ;;
+    *)
+      echo "$what: cannot reach tmux: ${PRL_TMUX_DETAIL:-unknown error}" >&2
+      ;;
+  esac
+}
+
 # True when the given pane ID currently exists.
 #
 # Do not substitute `tmux display-message -t <pane>` for this: it prints an

@@ -26,6 +26,8 @@ Members communicate by writing their `out` file, full stop. `scripts/notify.sh` 
 - **Poking a member that has gone quiet**, once `status.sh` says it owes a reply and `roster.sh verify` says its pane is alive and idle.
 - **Nothing else.** Never send a task through it. A task typed into a terminal leaves no record, cannot be re-read, and is silently lost if that agent is mid-turn.
 
+**A failed poke is not a blocked session.** Poking only saves time; the file is the channel. If `notify.sh` fails for any reason, the task is already written and the member will read its inbox on its own deadline — so carry on, and mention it to the human only if that member then goes quiet past that deadline. If it reports `sandboxed`, tmux is running and your own command sandbox is refusing the socket: re-run with the sandbox off rather than asking anyone to restart tmux.
+
 If a member starts replying to you through your pane instead of its `out` file, that is a member that has misread its role — tell it in its `in` to write the file.
 
 ## Running a team
