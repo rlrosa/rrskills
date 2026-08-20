@@ -51,6 +51,11 @@ Work the facts, in this order, and stop guessing:
 - Run `verify` whenever a notify fails or a member goes quiet for a round.
 - `scripts/roster.sh sync <dir>` rebuilds the roster from the live panes if the file is lost or stale.
 
+## A quiet member may be working, not waiting
+Before you conclude a member has stalled, remember it has no reason to tell you it is alive — its pane shows that, and `roster.sh verify` reads it. Silence during a long task is the expected shape of the protocol, not a fault.
+
+The mirror of that: **do not ask for progress reports.** A member that answers "still working" has spent a turn telling you what its pane already showed, and asking for it teaches it to write partial `out` files, which is how a round ends up reported before it is finished.
+
 ## End-of-turn checklist
 Run this every turn. Re-arming is the step everyone forgets, including thinkers who have just told a member off for forgetting it.
 

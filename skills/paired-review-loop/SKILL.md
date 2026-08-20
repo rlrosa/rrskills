@@ -63,7 +63,11 @@ Every member owns its own directory and writes nowhere else in the session.
    **Run it in the foreground.** One call is one wake: it blocks silently, then prints one line. Backgrounding it makes some harnesses hand you a turn every time they check, turning one cheap wait into a stream of paid wakeups. `--interval` is the script's own stat loop and costs nothing; turns are what cost. See [WAITING.md](WAITING.md).
    **Never narrate a wait.** If you wake with nothing to act on, re-arm and stop — do not spend a turn saying "still nothing".
 6. **On a timeout wake, check whose move it is — don't assume.** Run `scripts/status.sh <dir>`. It reads the mailbox timestamps and tells you, per member, whether that member owes a reply or *you* owe the next task. The stall this prevents is both sides believing the other owes something, and you cannot detect that from memory: your memory is the part that is wrong.
-7. **Waking is not reading.** Whoever wakes you, the thinker reads **every** member's `out` — several can report while it is busy, and answering only the last one to ring silently drops the rest.
+7. **Every turn must either advance the work or block. Never spend one reporting state.**
+   - Unfinished work still authorised? **Continue it.** Nothing new arriving does not mean you are blocked — it means nothing has changed and your existing task still stands.
+   - Round genuinely finished, or genuinely blocked? Write your file, then **block on a watcher**. That blocking call is what absorbs a harness that would otherwise hand you turn after turn.
+   - Neither of those? You have nothing to say. A turn that says "no change", "still waiting" or "no new instructions" costs money to tell somebody what they could have assumed.
+8. **Waking is not reading.** Whoever wakes you, the thinker reads **every** member's `out` — several can report while it is busy, and answering only the last one to ring silently drops the rest.
 8. **New work mid-task goes in `in-addendum`, never into `in`.** Rule 1 makes `in` the current task, overwritten each round — so while a member is working, overwriting `in` destroys the task it is executing and appending buries it. When more work arrives before the member has reported:
    - Write it to `<session>/members/<name>/in-addendum`.
    - The member reads `in-addendum` **after** finishing `in`, never instead of it, and deletes it once folded into that round's `out`.

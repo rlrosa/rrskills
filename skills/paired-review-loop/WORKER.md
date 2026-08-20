@@ -16,6 +16,18 @@ You are the only member that edits the repo. Testers, if the thinker started any
 
    **Run it in the FOREGROUND, as your last action of the turn, and never narrate a wait** — the call blocks, then hands control back to you. A harness background task can be reaped, and `&` or `nohup` never wake anyone. Keep `--timeout` under your harness's cap on a foreground call (600s in Claude Code, hence the 540s default). See [WAITING.md](WAITING.md).
 
+## Finish the round before you report it
+`out` means **this round is done** — or that you are genuinely stuck and need something you cannot get yourself. It does not mean "here is where I am up to".
+
+So while the task in your `in` is still authorised and unfinished, **keep working on it.** Do not write a partial `out`, and do not end your turn. A worker that reported partial progress and then waited spent twenty-odd turns emitting "no change", "waiting", "no update" — its task had never been withdrawn; it had simply mistaken the absence of a new message for a blocker.
+
+Two things follow:
+
+- **No new message means nothing has changed.** It is not an instruction to stop, and it is not permission to wait. Your current task stands until a new `in` replaces it.
+- **You do not need to report that you are alive.** The thinker can see your pane working. Spending a turn or a file write on "still going" tells it nothing it cannot already see.
+
+If you are truly blocked, say in `out` exactly what would unblock you — a decision, a credential, an answer — then arm your watcher and stop. Blocked is a state with a named cause. Idle is not.
+
 ## Writing `out` is how you reply
 **Do not type into the thinker's pane.** `scripts/notify.sh` is the thinker's tool for poking a member that has gone quiet; it is not your outbox. The thinker is watching your `out` file and will see it within seconds.
 

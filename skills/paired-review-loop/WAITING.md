@@ -39,9 +39,15 @@ So backgrounding it is not a small stylistic difference. A harness that gives yo
 
 ## Codex specifically
 
-Do **not** put `watch.sh` in a background terminal. Codex hands you a turn every time it looks at one, which is the failure above. Call it in the foreground as your last action.
+**Do not put `watch.sh` in a background terminal.** Codex hands you a turn every time it looks at one, which is the failure above. Call it in the foreground as your last action.
 
 If codex's foreground cap is shorter than your `--timeout`, lower the timeout to sit under the cap rather than reaching for the background — a shorter wait that ends cleanly beats a long one that wakes you ten times.
+
+**A persistent `/goal` will resume you the moment you stop.** That is what it is for, and it is why ending a turn without a blocking call is so expensive here: `/goal` immediately gives you another turn, you find nothing new in your inbox, you say "no change", and it resumes you again. One worker spent twenty-odd turns that way.
+
+The blocking wait is what absorbs it. While `watch.sh` is running in the foreground, `/goal` has nothing to resume — you are already busy. So the rule is not just "arm a watcher", it is **arm it as the last thing you do, in the foreground, and let it block.**
+
+And if `/goal` resumes you while your task is unfinished, that is not a prompt for a status report. Carry on implementing.
 
 ## Keep the deadline under your harness's cap
 
