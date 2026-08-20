@@ -20,10 +20,28 @@ A process that notices a stall and cannot give you a turn has achieved nothing. 
 
 | Way of arming it | What happens |
 | --- | --- |
-| **Foreground, blocking** | Works. Field-tested across a long session without a single failure. |
-| **Harness background task** (Claude Code `run_in_background: true`) | **Can be reaped.** One session saw six consecutive arms killed inside a minute, after four earlier ones had survived their full deadline. Use it only where you can tolerate losing the wake. |
+| **Foreground, blocking** | Works. One call, one wake. Field-tested across a long session without a single failure. |
+| **Harness background task** (Claude Code `run_in_background: true`, codex background terminal) | **Can be reaped**, and on some harnesses **wakes you repeatedly**. See below — this is the expensive one. |
 | **Trailing `&`** | Never works. The shell backgrounds it, your call returns in milliseconds, and nothing is watching the watcher. |
 | **`nohup` / `setsid`** | Survives and is useless. A process outside the harness cannot give an agent a turn. |
+
+## The interval is free. Wakeups are not.
+
+These get confused, and confusing them is expensive.
+
+`--interval` is how often **the script** stats the files. Measured: 34 `stat()` calls over three seconds. No model, no tokens, no turn. You could set it to 1 and it would still be free.
+
+What costs is **being handed a turn**. One `watch.sh` call is one wake: it blocks, stays completely silent for the whole wait — 0 bytes written across four seconds of waiting — then prints one line and exits.
+
+So backgrounding it is not a small stylistic difference. A harness that gives you a turn each time it checks on a background command turns one cheap wait into a stream of paid wakeups. That has been seen live: a thinker woken over and over to report "no handoff yet", "still active", "no report yet", while the script sat there silently doing exactly what it was asked.
+
+**Never report progress on a wait.** If you wake with nothing to act on, do not narrate it — re-arm and stop. A turn that says "still waiting" has cost money to tell somebody something they could have assumed.
+
+## Codex specifically
+
+Do **not** put `watch.sh` in a background terminal. Codex hands you a turn every time it looks at one, which is the failure above. Call it in the foreground as your last action.
+
+If codex's foreground cap is shorter than your `--timeout`, lower the timeout to sit under the cap rather than reaching for the background — a shorter wait that ends cleanly beats a long one that wakes you ten times.
 
 ## Keep the deadline under your harness's cap
 

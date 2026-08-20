@@ -4,13 +4,25 @@
 # Waits for one of the files to change (its mtime increases, or it first
 # appears), or for the deadline to pass.
 #
+# ONE CALL WAKES YOU ONCE. It blocks, prints a single line, and exits. It is
+# silent for the whole wait, so there is nothing to check on and no reason to
+# look at it while it runs.
+#
+# --interval is how often the SCRIPT stats the files. It costs a handful of
+# syscalls and no model time whatsoever, so 15s is cheap and 1s would be too.
+# What costs is being handed a turn. Every wake is paid for, which is why this
+# blocks rather than reporting progress.
+#
 # RUN IT IN THE FOREGROUND, as the last thing you do in a turn. The call blocks
 # until a file changes or the deadline passes, and then control returns to you.
 # That is the only arrangement that reliably works:
 #
-#   - Backgrounded through a harness's background-task facility, it can be
-#     reaped. Observed in the field: six consecutive arms killed inside a
-#     minute, after four earlier ones survived their full deadline.
+#   - Backgrounded through a harness's background-task facility it can be
+#     reaped (six consecutive arms killed inside a minute, after four earlier
+#     ones survived their full deadline) - and worse, some harnesses hand you a
+#     turn every time they check on it. One thinker was woken over and over to
+#     say "still nothing" while this script sat there silently doing its job.
+#     Backgrounding converts one cheap wait into a stream of paid wakeups.
 #   - Detached with `nohup` or `setsid` it survives and is useless, because a
 #     process outside the harness cannot give an agent a turn. One such monitor
 #     detected a stall perfectly and wrote its diagnosis to a log nobody read.
@@ -20,6 +32,10 @@
 # WAITING.md.
 #
 #   scripts/watch.sh '/tmp/prl-demo/members/*/out' --timeout 540
+#
+# Pass --session <dir> and a TIMEOUT also prints who owes what, so a wake with
+# nothing on it still arrives with the answer instead of costing you a second
+# call to work it out.
 #
 # Both outcomes exit 0 and are told apart by the first word of stdout. Neither
 # is an error, so nothing announces a failure that did not happen:
@@ -60,6 +76,8 @@ set -u
 # Files are the channel now, not a fallback, so polling is how a round trip
 # actually completes. A few stat calls cost nothing; waiting a minute to notice
 # a report that is already on disk costs a round.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SESSION=""
 INTERVAL=15
 # Deliberately under the 600s ceiling harnesses tend to put on a foreground
 # command. A deadline past that cap means the tool severs the call before the
@@ -73,6 +91,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --interval) INTERVAL="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
+    --session) SESSION="$2"; shift 2 ;;
     -h | --help)
       awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
       exit 0
@@ -188,6 +207,9 @@ while true; do
     # command failed with exit code 3" — sending the reader off to check
     # whether something had broken, every single time. Branch on the word.
     echo "TIMEOUT $TIMEOUT"
+    # Spend the wake usefully. Nothing arriving is exactly when you need to know
+    # whose move it is, and working that out should not cost another round.
+    [ -n "$SESSION" ] && "$SCRIPT_DIR/status.sh" "$SESSION" 2>&1
     exit 0
   fi
   sleep "$INTERVAL"

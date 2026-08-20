@@ -53,12 +53,15 @@ Every member owns its own directory and writes nowhere else in the session.
 
    ```
    # thinker — every member's report, quote the pattern
-   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540 --session <dir>
    # member — your own next task
    scripts/watch.sh <dir>/members/<you>/in --interval 15 --timeout 540
    ```
 
    Both outcomes exit `0`; the first word of its output is `CHANGED` or `TIMEOUT`. Neither is an error, so a harness never announces a failure that did not happen. Keep **exactly one** watcher armed; kill it when you wake, act, then arm the next one.
+
+   **Run it in the foreground.** One call is one wake: it blocks silently, then prints one line. Backgrounding it makes some harnesses hand you a turn every time they check, turning one cheap wait into a stream of paid wakeups. `--interval` is the script's own stat loop and costs nothing; turns are what cost. See [WAITING.md](WAITING.md).
+   **Never narrate a wait.** If you wake with nothing to act on, re-arm and stop — do not spend a turn saying "still nothing".
 6. **On a timeout wake, check whose move it is — don't assume.** Run `scripts/status.sh <dir>`. It reads the mailbox timestamps and tells you, per member, whether that member owes a reply or *you* owe the next task. The stall this prevents is both sides believing the other owes something, and you cannot detect that from memory: your memory is the part that is wrong.
 7. **Waking is not reading.** Whoever wakes you, the thinker reads **every** member's `out` — several can report while it is busy, and answering only the last one to ring silently drops the rest.
 8. **New work mid-task goes in `in-addendum`, never into `in`.** Rule 1 makes `in` the current task, overwritten each round — so while a member is working, overwriting `in` destroys the task it is executing and appending buries it. When more work arrives before the member has reported:

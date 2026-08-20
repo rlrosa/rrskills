@@ -14,7 +14,7 @@ You are the only member that edits the repo. Testers, if the thinker started any
    scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 540
    ```
 
-   **Run it in the FOREGROUND, as your last action of the turn** — the call blocks, then hands control back to you. A harness background task can be reaped, and `&` or `nohup` never wake anyone. Keep `--timeout` under your harness's cap on a foreground call (600s in Claude Code, hence the 540s default). See [WAITING.md](WAITING.md).
+   **Run it in the FOREGROUND, as your last action of the turn, and never narrate a wait** — the call blocks, then hands control back to you. A harness background task can be reaped, and `&` or `nohup` never wake anyone. Keep `--timeout` under your harness's cap on a foreground call (600s in Claude Code, hence the 540s default). See [WAITING.md](WAITING.md).
 
 ## Writing `out` is how you reply
 **Do not type into the thinker's pane.** `scripts/notify.sh` is the thinker's tool for poking a member that has gone quiet; it is not your outbox. The thinker is watching your `out` file and will see it within seconds.

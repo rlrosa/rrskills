@@ -9,7 +9,7 @@ You drive a worker through a plan and **verify everything**. The worker does the
 3. Wait on the files — that is the channel. Arm exactly one deadline across every member's report, **quoting the pattern** so the shell leaves it alone:
 
    ```
-   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540 --session <dir>
    ```
 
    Unquoted, on round one, no `out` exists yet, so the shell finds nothing to expand and hands over the literal `*` — a filename that can never appear. Members write their `out` and wait; they do not ring you.

@@ -489,6 +489,38 @@ try {
     `a missing server should not be reported as a sandbox: ${noServer.stderr}`
   );
 
+  console.log('Running test 17: one wait is one wake, and a timeout carries the answer...');
+  // The expensive misuse is backgrounding the watcher in a harness that grants
+  // a turn each time it checks. The script's side of that bargain is to stay
+  // silent and wake the caller exactly once, so assert both.
+  const quietDir = path.join(tmpDir, 'prl-quiet');
+  runScript(roster, ['init', quietDir]);
+  // A registered member with an unanswered task: exactly the state a thinker is
+  // in while it waits, and the one it needs summarised when nothing arrives.
+  const quietPane = tmux(['split-window', '-d', '-t', thinkerPane, '-P', '-F', '#{pane_id}']);
+  runScript(roster, ['add', quietDir, 'worker', 'worker', quietPane, tmpDir, 'cat']);
+  fs.writeFileSync(path.join(quietDir, 'members', 'worker', 'in'), 'TASK\n');
+
+  const waited = runScript(watch, [
+    path.join(quietDir, 'members', '*', 'out'),
+    '--session', quietDir, '--interval', '1', '--timeout', '3',
+  ]);
+  assert.strictEqual(waited.code, 0, 'a deadline is not an error');
+  const spoke = waited.stdout.trim().split('\n');
+  assert(spoke[0].startsWith('TIMEOUT'), `the first line reports the outcome: ${waited.stdout}`);
+  // Silence while waiting is what makes one call cost one turn: a script that
+  // reported progress would invite a harness to keep waking its caller.
+  assert(
+    !/CHANGED/.test(waited.stdout),
+    'a wait that timed out must not also claim something changed'
+  );
+  // --session makes the wake productive: whose move it is, without a second call.
+  assert(
+    /worker\s+worker/.test(waited.stdout),
+    `a timeout should also say who owes what: ${waited.stdout}`
+  );
+  tmux(['kill-pane', '-t', quietPane]);
+
   console.log('All roster tests passed successfully!');
 } catch (err) {
   cleanup();
