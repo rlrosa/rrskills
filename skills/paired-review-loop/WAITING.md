@@ -25,6 +25,26 @@ A process that notices a stall and cannot give you a turn has achieved nothing. 
 | **Trailing `&`** | Never works. The shell backgrounds it, your call returns in milliseconds, and nothing is watching the watcher. |
 | **`nohup` / `setsid`** | Survives and is useless. A process outside the harness cannot give an agent a turn. |
 
+## Two knobs, and they are not interchangeable
+
+| | What it decides | What it costs |
+| --- | --- | --- |
+| `--interval` | How fast a **real reply** wakes you | A few `stat` calls. No model time. Free. |
+| `--timeout` | How often you are woken when **nothing has happened** | A paid turn, every time |
+
+**Shortening the timeout does not make the loop more responsive.** This is the mistake that burns the most money, and it feels like diligence.
+
+Measured:
+
+| Settings | Real reply arrives in | Idle wakeups per hour |
+| --- | --- | --- |
+| `--interval 30 --timeout 60` | 30s | **60** |
+| `--interval 15 --timeout 540` | 15s | **6** |
+
+The "responsive" one is twice as slow and ten times more expensive. If you want to react faster, **lower `--interval`** — it is free. The deadline exists only for the case where nobody ever replies, so it should be long.
+
+`watch.sh` warns below 120s.
+
 ## The interval is free. Wakeups are not.
 
 These get confused, and confusing them is expensive.

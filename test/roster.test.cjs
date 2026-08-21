@@ -521,6 +521,40 @@ try {
   );
   tmux(['kill-pane', '-t', quietPane]);
 
+  console.log('Running test 18: a deadline used as a poll is called out...');
+  // A thinker instructed its worker to "re-arm the 30-second watcher" to stay
+  // responsive. It made the loop twice as slow and ten times more expensive,
+  // because the deadline has nothing to do with how fast a reply arrives.
+  const pollish = runScript(watch, [
+    path.join(tmpDir, 'never-written'), '--interval', '30', '--timeout', '60',
+  ]);
+  assert.strictEqual(pollish.code, 0, 'a short deadline still works, it is just wasteful');
+  assert(
+    /60 times an hour/.test(pollish.stderr),
+    `it should count the wasted wakeups: ${pollish.stderr}`
+  );
+  assert(
+    /--interval/.test(pollish.stderr),
+    'it should point at the knob that actually controls responsiveness'
+  );
+
+  // A sensible deadline must stay silent, or the warning becomes noise nobody
+  // reads. Touch the file so the call returns at once instead of waiting out
+  // the 540s it is being asked to accept.
+  const sanePath = path.join(tmpDir, 'sane-target');
+  fs.writeFileSync(sanePath, 'initial\n');
+  const sane = spawnSync(
+    'bash',
+    ['-c', '( sleep 1; printf changed > "$1" ) & exec "$2" "$1" --interval 1 --timeout 540',
+      'bash', sanePath, watch],
+    { encoding: 'utf8', timeout: 30000 }
+  );
+  assert(/CHANGED/.test(sane.stdout || ''), 'it should still return on the change');
+  assert(
+    !/times an hour/.test(sane.stderr || ''),
+    `a sensible deadline should not be warned about: ${sane.stderr}`
+  );
+
   console.log('All roster tests passed successfully!');
 } catch (err) {
   cleanup();

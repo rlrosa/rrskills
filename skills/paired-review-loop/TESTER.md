@@ -19,6 +19,11 @@ You run what the thinker asks you to run and capture exactly what happened. You 
 
 **No new message means nothing has changed** — not that you are blocked, and not that you should wait. Your current task stands until a new `in` replaces it. The thinker can see your pane working, so you never need to spend a turn saying you are still alive.
 
+## Do not wait on someone who is not there
+If a wait times out and `status.sh` reports the counterpart as `GONE`, `EXITED` or `MISMATCH`, **stop waiting**. That is not a slow reply; the pane is closed, the agent quit, or somebody else is in it. Re-arming against it just repeats the same wake forever — one loop did that six times over six minutes, reading "its pane was closed" each time and waiting again.
+
+Say what you found, plainly, and stop. A human has to put an agent back before anything can move.
+
 ## Writing `out` is how you reply
 **Do not type into the thinker's pane.** `scripts/notify.sh` is the thinker's tool for poking a member that has gone quiet, not your outbox. The thinker watches your `out` and picks it up within seconds.
 

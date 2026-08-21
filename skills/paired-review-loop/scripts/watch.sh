@@ -8,10 +8,18 @@
 # silent for the whole wait, so there is nothing to check on and no reason to
 # look at it while it runs.
 #
-# --interval is how often the SCRIPT stats the files. It costs a handful of
-# syscalls and no model time whatsoever, so 15s is cheap and 1s would be too.
-# What costs is being handed a turn. Every wake is paid for, which is why this
-# blocks rather than reporting progress.
+# The two knobs do different jobs, and confusing them is expensive:
+#
+#   --interval  how fast a real reply wakes you. Costs a handful of stat calls
+#               and no model time at all, so 15s is cheap and 1s would be too.
+#   --timeout   how often you are woken when NOTHING has happened. Every one of
+#               those is a paid turn.
+#
+# A short timeout does NOT make the loop more responsive - the interval decides
+# that. Measured: --interval 30 --timeout 60 answers a real reply in 30s and
+# wakes you 60 times an hour while idle; --interval 15 --timeout 540 answers in
+# 15s and wakes you 6 times. Shortening the timeout to "avoid stalling" buys
+# nothing and pays ten times over.
 #
 # RUN IT IN THE FOREGROUND, as the last thing you do in a turn. The call blocks
 # until a file changes or the deadline passes, and then control returns to you.
@@ -85,6 +93,8 @@ INTERVAL=15
 # cut me off". A default that produces ambiguous outcomes is worse than none.
 TIMEOUT=540
 PRL_TOOL_TIMEOUT_CEILING="${PRL_TOOL_TIMEOUT_CEILING:-600}"
+# Below this a deadline is being used as a poll, which is what it is not for.
+PRL_SHORT_TIMEOUT="${PRL_SHORT_TIMEOUT:-120}"
 FILES=()
 
 while [ $# -gt 0 ]; do
@@ -181,6 +191,14 @@ done < <(expand_targets)
 # A deadline past the harness's own cap on a foreground command means the tool
 # ends the call, not this script — and the caller then cannot tell "nothing
 # happened" from "I was cut off".
+# A very short deadline is nearly always a misunderstanding of what it is for.
+if [ "$TIMEOUT" -ne 0 ] && [ "$TIMEOUT" -lt "$PRL_SHORT_TIMEOUT" ]; then
+  echo "watch: --timeout ${TIMEOUT}s wakes you $((3600 / TIMEOUT)) times an hour while nothing" >&2
+  echo "watch: happens, and does not make a real reply arrive any sooner - --interval ${INTERVAL}s" >&2
+  echo "watch: decides that, and costs nothing. If you want to react faster, lower --interval." >&2
+  echo "watch: The deadline is a safety net for the case where nobody replies at all." >&2
+fi
+
 if [ "$TIMEOUT" -gt "$PRL_TOOL_TIMEOUT_CEILING" ]; then
   echo "watch: --timeout ${TIMEOUT}s is above the ${PRL_TOOL_TIMEOUT_CEILING}s a foreground" >&2
   echo "watch: call usually gets. Your harness may cut this off first, and you will not be" >&2

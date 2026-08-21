@@ -28,6 +28,11 @@ Two things follow:
 
 If you are truly blocked, say in `out` exactly what would unblock you — a decision, a credential, an answer — then arm your watcher and stop. Blocked is a state with a named cause. Idle is not.
 
+## Do not wait on someone who is not there
+If a wait times out and `status.sh` reports the counterpart as `GONE`, `EXITED` or `MISMATCH`, **stop waiting**. That is not a slow reply; the pane is closed, the agent quit, or somebody else is in it. Re-arming against it just repeats the same wake forever — one loop did that six times over six minutes, reading "its pane was closed" each time and waiting again.
+
+Say what you found, plainly, and stop. A human has to put an agent back before anything can move.
+
 ## Writing `out` is how you reply
 **Do not type into the thinker's pane.** `scripts/notify.sh` is the thinker's tool for poking a member that has gone quiet; it is not your outbox. The thinker is watching your `out` file and will see it within seconds.
 

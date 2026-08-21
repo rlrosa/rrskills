@@ -44,12 +44,19 @@ Work the facts, in this order, and stop guessing:
 2. **If you owe the next task, write it.** The most common stall is the thinker waiting for a reply it has already received.
 3. **If a member owes and its pane is `OK`, poke it** with `notify.sh --member <name>` and re-arm. It may simply be slow, or it may have ended its turn without arming a watcher — in which case a poke is the only thing that will restart it.
 4. **Twice is enough.** After two unanswered nudges for the same round, stop nudging and tell the human: which member, which task, how long. A third nudge has never been the thing that fixed it.
-5. **`WAITING`, `EXITED`, `GONE` or `MISMATCH` is not a nudge problem** — that member is blocked on a prompt, dead, or replaced. Escalate immediately; re-ringing cannot help.
+5. **`WAITING`, `EXITED`, `GONE` or `MISMATCH` is not a nudge problem** — that member is blocked on a prompt, dead, or replaced. Escalate immediately. Neither re-ringing nor re-arming can help, and re-arming turns one dead member into a wake every deadline for as long as the session lasts.
 
 ## Track who is who
 - `scripts/roster.sh list <dir>` — the team. `scripts/roster.sh verify <dir>` — who is alive, exited, or in a pane that now belongs to someone else.
 - Run `verify` whenever a notify fails or a member goes quiet for a round.
 - `scripts/roster.sh sync <dir>` rebuilds the roster from the live panes if the file is lost or stale.
+
+## Do not instruct a short watcher
+When you write a task, you may be tempted to tell the member to "re-arm a 30-second watcher" so it stays responsive. It does the opposite: the deadline has no effect on how fast a reply reaches anyone, and a 60s deadline wakes that member 60 times an hour to say nothing.
+
+Responsiveness is `--interval`, which is free. If you say anything about waiting at all, say `--interval 15 --timeout 540`. Better still, say nothing — the defaults are already that.
+
+The same applies to you. Being told "don't let this stall" is not a reason to shorten your own deadline; it is a reason to act on reports promptly when they arrive.
 
 ## A quiet member may be working, not waiting
 Before you conclude a member has stalled, remember it has no reason to tell you it is alive — its pane shows that, and `roster.sh verify` reads it. Silence during a long task is the expected shape of the protocol, not a fault.
