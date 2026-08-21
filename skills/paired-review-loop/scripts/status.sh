@@ -93,6 +93,14 @@ fi
 
 needs_attention=0
 now=$(date +%s)
+
+# Lead with which copy of the scripts is talking. Several can be installed at
+# once — a checkout, an installed plugin, a cached plugin version — and a
+# session quietly running a months-old one looks completely normal from the
+# inside. Printing it on the command a thinker runs every round is the cheapest
+# place for a stale copy to become obvious.
+printf 'paired-review-loop %s  (%s)\n' "$PRL_VERSION" "$PRL_SCRIPTS_DIR"
+
 printf '%-12s %-10s %-6s %-9s %s\n' member owes since pane note
 
 while read -r name; do
