@@ -204,6 +204,12 @@ Every member's CLI must already have this skill installed — `./install.sh` fro
 
 You do that too. Stand the old member down in its `in` first, then kill and recreate the pane yourself, `roster.sh add` the new pane under the same name, and `roster.sh brief` it. `roster.sh verify` will report the old row as `GONE` in between, which is the intended signal rather than something to fix silently.
 
+## A parked codex goal is not a hung member
+
+`roster.sh verify` will say `OK` and `status.sh` will say the pane is idle, both correctly — a member whose `/goal` has stalled is alive, healthy and deliberately not working. What it is not is reachable by an ordinary nudge.
+
+Look for `Goal stalled (/goal resume)` in the pane footer. The fix is a new task in `in` followed by `roster.sh kick`, which sends the resume and then proves the pane started. Everything else — re-notifying, re-arming a watcher, waiting longer — does nothing at all.
+
 ## Telling a thinking member from a hung one
 
 The hardest state to read, and the most expensive to get wrong. A hung member looks exactly like a working one: its timer keeps counting, so `roster.sh verify` reports `OK` and any "is the pane redrawing" check says yes. One member sat like that twice in a session, for 17 and 15 minutes, showing `Working (16m 34s)` the whole time — it had read its task and then done nothing.

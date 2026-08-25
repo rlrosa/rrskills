@@ -67,8 +67,9 @@ Every member owns its own directory and writes nowhere else in the session.
    - Unfinished work still authorised? **Continue it.** Nothing new arriving does not mean you are blocked — it means nothing has changed and your existing task still stands.
    - Round genuinely finished, or genuinely blocked? Write your file, then **block on a watcher**. That blocking call is what absorbs a harness that would otherwise hand you turn after turn.
    - Neither of those? You have nothing to say. A turn that says "no change", "still waiting" or "no new instructions" costs money to tell somebody what they could have assumed.
-8. **Waking is not reading.** Whoever wakes you, the thinker reads **every** member's `out` — several can report while it is busy, and answering only the last one to ring silently drops the rest.
-8. **New work mid-task goes in `in-addendum`, never into `in`.** Rule 1 makes `in` the current task, overwritten each round — so while a member is working, overwriting `in` destroys the task it is executing and appending buries it. When more work arrives before the member has reported:
+8. **Owing somebody a reply is not a state you may end a turn in.** The commonest stall in practice is not a member going quiet — it is the thinker reading a report and stopping, because reading felt like the end of the round. It is the middle. Review, write the next `in`, confirm it started, and only then wait.
+9. **Waking is not reading.** Whoever wakes you, the thinker reads **every** member's `out` — several can report while it is busy, and answering only the last one to ring silently drops the rest.
+10. **New work mid-task goes in `in-addendum`, never into `in`.** Rule 1 makes `in` the current task, overwritten each round — so while a member is working, overwriting `in` destroys the task it is executing and appending buries it. When more work arrives before the member has reported:
    - Write it to `<session>/members/<name>/in-addendum`.
    - The member reads `in-addendum` **after** finishing `in`, never instead of it, and deletes it once folded into that round's `out`.
    - Anything that changes the current task rather than adding to it is not an addendum: let the member finish, then write a fresh `in`.

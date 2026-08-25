@@ -15,6 +15,14 @@
 #       is, by typing into the pane you registered for it. Use once, after the
 #       human has started an agent there.
 #
+#   roster.sh kick <session-dir> <name>
+#       Make sure a member is actually working on its inbox, and prove it.
+#       Leaves a busy member alone; resumes a parked codex goal; otherwise
+#       nudges. Then it presses Enter until the pane is really working, because
+#       a send-keys that exits 0 proves nothing - the Enter is routinely
+#       swallowed and the command sits visibly unsent. Exits non-zero rather
+#       than let you report a member as running when it is not.
+#
 #   roster.sh list <session-dir> [role]
 #       Print the roster, optionally only the members holding one role.
 #
@@ -245,6 +253,54 @@ case "$VERB" in
     prl_wait_until_working "$PANE" ||
       echo "roster: '$NAME' took the briefing but showed no sign of working; check pane $PANE" >&2
     echo "BRIEFED $NAME $PANE"
+    ;;
+
+  kick)
+    SESSION="${2:?usage: roster.sh kick <session-dir> <name>}"
+    NAME="${3:?missing <name>}"
+    SESSION=$(cd "$SESSION" && pwd)
+    PANE=$("$SCRIPT_DIR/roster.sh" resolve "$SESSION" "$NAME") || exit $?
+
+    if prl_pane_is_shell "$PANE"; then
+      echo "roster: '$NAME' is at a shell prompt in $PANE - its agent has exited." >&2
+      echo "roster: a human has to start one there again; nothing can be kicked." >&2
+      exit 12
+    fi
+
+    # Already working: leave it alone. Interrupting a member mid-task to ask
+    # whether it is working is how you lose the work it was doing.
+    if prl_pane_is_busy "$PANE"; then
+      echo "ACTIVE $NAME $PANE (already working)"
+      exit 0
+    fi
+
+    # A codex goal parks itself when it runs out of authorised work and will not
+    # look at its inbox again until it is resumed. Its own footer says so, so
+    # read that rather than guessing which agent this is.
+    if prl_capture "$PANE" | grep -q 'Goal stalled'; then
+      WAKE='/goal resume'
+    else
+      WAKE="prl: your inbox was updated - read $SESSION/members/$NAME/in and continue"
+    fi
+
+    prl_send_verified "$PANE" "$WAKE"
+    send_status=$?
+    if [ "$send_status" -eq 1 ]; then
+      echo "roster: '$NAME' would not accept '$WAKE' in $PANE" >&2
+      exit 13
+    fi
+
+    # The whole point of this verb. A send-keys that exits 0 proves nothing: the
+    # Enter is routinely swallowed, leaving the command sitting visibly unsent
+    # while the pane stays parked. A night was lost to a goal that was typed and
+    # never submitted, so keep pressing until the pane is actually working.
+    if ! prl_wait_until_working "$PANE"; then
+      echo "roster: sent '$WAKE' to $PANE but '$NAME' never started working." >&2
+      echo "roster: look at the pane - the command is probably still sitting in its" >&2
+      echo "roster: input box unsent. Do NOT report this member as running." >&2
+      exit 13
+    fi
+    echo "STARTED $NAME $PANE (sent '$WAKE'; pane is working)"
     ;;
 
   sync)

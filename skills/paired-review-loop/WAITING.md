@@ -63,6 +63,20 @@ So backgrounding it is not a small stylistic difference. A harness that gives yo
 
 If codex's foreground cap is shorter than your `--timeout`, lower the timeout to sit under the cap rather than reaching for the background — a shorter wait that ends cleanly beats a long one that wakes you ten times.
 
+### The `/goal` lifecycle, from the thinker's side
+
+A codex member driven by a persistent `/goal` has three states, and the third is the one that strands sessions:
+
+| Footer says | What it means | What to do |
+| --- | --- | --- |
+| `Working` | Executing its task | Nothing. Leave it. |
+| `Ready` | Idle between turns | A nudge will be picked up. |
+| `Goal stalled (/goal resume)` | It ran out of authorised work and **parked**. It will not look at its inbox again on its own. | Write the next `in`, then `roster.sh kick` — a plain nudge is not enough. |
+
+That third state is reached honestly: the member finished its task, found no new instruction across a few continuations, and stopped rather than invent work. It is doing what it was told. But it is now deaf to the mailbox until resumed, so writing a new `in` alone changes nothing.
+
+`roster.sh kick` reads that footer and sends `/goal resume` instead of a nudge when it sees it — and then confirms the pane is really working, because a `/goal resume` whose Enter is swallowed sits in the input box while the footer still reads `Goal stalled`. That happened twice in one session.
+
 **A persistent `/goal` will resume you the moment you stop.** That is what it is for, and it is why ending a turn without a blocking call is so expensive here: `/goal` immediately gives you another turn, you find nothing new in your inbox, you say "no change", and it resumes you again. One worker spent twenty-odd turns that way.
 
 The blocking wait is what absorbs it. While `watch.sh` is running in the foreground, `/goal` has nothing to resume — you are already busy. So the rule is not just "arm a watcher", it is **arm it as the last thing you do, in the foreground, and let it block.**

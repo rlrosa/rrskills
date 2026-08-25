@@ -20,6 +20,38 @@ You drive a worker through a plan and **verify everything**. The worker does the
 5. **Check the team is alive before you settle in to wait again.** `scripts/roster.sh verify <dir>` watches each pane for a moment and separates a member that is working from one frozen on an approval prompt, dead, or replaced. This is the one thing you use tmux for.
 6. Repeat. Accept a milestone only after you've confirmed it yourself.
 
+## You may not end a turn while you owe the next task
+This is the failure that costs the most, by a wide margin. Every stall in one long session traced back to the same thing, and the thinker wrote it down itself each time: *"the worker had replied, and I had not assigned the next task."*
+
+The shape is always the same. The worker finishes, writes `out`, and waits at the review gate exactly as it should. You read the report — and then you stop, because reading felt like the end of the round. It is not. The round ends when the member has its next task.
+
+So: **reading a report is the middle of your turn, not the end of it.** If `status.sh` says `you owe the next task`, you are not allowed to stop. Review the work, then overwrite `in`, then make sure it started, and only then wait.
+
+**"Recovered" is not a stopping point either.** Reporting that a member is unstalled and working, and then ending the interaction, just moves the next stall to the end of that milestone. One session did that twice in a row.
+
+## Proof that a member is running is never a send-keys exit code
+A goal was typed into a worker's pane, reported as launched, and never submitted. That cost an entire night: the worker sat idle until a human noticed.
+
+A command that "sent successfully" proves only that tmux accepted the keystrokes. The Enter is routinely swallowed, leaving the text sitting visibly in the input box while the pane stays parked — twice in one session with `/goal resume`, which stayed on screen while the footer still read `Goal stalled`.
+
+Use `scripts/roster.sh kick <dir> <name>`. It leaves a working member alone, resumes a parked codex goal, otherwise nudges, and then keeps pressing Enter until the pane is really working — exiting non-zero rather than letting you report a member as running when it is not. Never hand-roll `tmux send-keys` for this.
+
+Acceptance is: the input box is empty, the pane is working, and `status.sh` has flipped to `owes a reply`. Anything less is a claim, not a check.
+
+## The full round, in order
+Not "verify it started". All of it:
+
+1. Write one self-contained task to `members/<name>/in`.
+2. `scripts/roster.sh kick <dir> <name>` — and believe its exit code, not your own send.
+3. Confirm `status.sh` now says that member **owes a reply**.
+4. Wait, in the foreground, with a watcher that returns control to you.
+5. When it returns, read the whole `out` immediately.
+6. Review the claim independently — the commit, the evidence, the numbers.
+7. **Overwrite `in` with the next milestone or a revision**, before the member runs out of things to wait through.
+8. Back to 2.
+
+A watcher that cannot hand you control and cause step 5 to happen is not doing anything for you, however healthy the process looks.
+
 ## You are the only one who uses tmux
 Members communicate by writing their `out` file, full stop. `scripts/notify.sh` is yours, and it has exactly two uses:
 

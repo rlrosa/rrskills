@@ -555,6 +555,65 @@ try {
     `a sensible deadline should not be warned about: ${sane.stderr}`
   );
 
+  console.log('Running test 19: kick proves a member started, and will not pretend...');
+  // A goal was typed into a worker's pane, reported as launched, never
+  // submitted, and a night was lost. So the check is not "did send-keys work"
+  // but "is the pane actually working", and kick must refuse to claim
+  // otherwise.
+  const kickDir = path.join(tmpDir, 'prl-kick');
+  runScript(roster, ['init', kickDir]);
+  // Its own window: in the crowded shared one the pane is a few columns wide,
+  // and the stalled-goal footer wraps so the match splits across rows.
+  const kickHost = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
+  const kickPane = tmux(['split-window', '-h', '-d', '-t', kickHost, '-P', '-F', '#{pane_id}']);
+  tmux(['send-keys', '-t', kickPane, '-l', 'cat']);
+  tmux(['send-keys', '-t', kickPane, 'Enter']);
+  execFileSync('sleep', ['1']);
+  runScript(roster, ['add', kickDir, 'worker', 'worker', kickPane, tmpDir, 'codex']);
+
+  // `cat` accepts the keystrokes and never starts working, which is exactly the
+  // shape of the failure: delivery succeeded, execution did not.
+  const wouldNotStart = runScript(roster, ['kick', kickDir, 'worker']);
+  assert.notStrictEqual(wouldNotStart.code, 0, 'kick must not report a member that never started');
+  assert(
+    /never started working/.test(wouldNotStart.stderr),
+    `it should say so plainly: ${wouldNotStart.stderr}`
+  );
+
+  // A parked codex goal needs /goal resume, not an ordinary nudge; the footer
+  // is what says which.
+  tmux(['send-keys', '-t', kickPane, 'C-c']);
+  execFileSync('sleep', ['1']);
+  tmux(['send-keys', '-t', kickPane, '-l', "printf 'Ready . Goal stalled (/goal resume)\\n'; cat"]);
+  tmux(['send-keys', '-t', kickPane, 'Enter']);
+  execFileSync('sleep', ['1']);
+  // Count rather than look: the earlier kick's nudge is still on screen, so
+  // presence proves nothing about what this kick just sent.
+  const countIn = (text, needle) => text.split(needle).length - 1;
+  const beforeStalled = tmux(['capture-pane', '-p', '-t', kickPane]);
+  runScript(roster, ['kick', kickDir, 'worker']);
+  const afterStalled = tmux(['capture-pane', '-p', '-t', kickPane]);
+  assert(
+    countIn(afterStalled, '/goal resume') > countIn(beforeStalled, '/goal resume'),
+    'a stalled goal should be sent a resume'
+  );
+  assert.strictEqual(
+    countIn(afterStalled, 'your inbox was updated'),
+    countIn(beforeStalled, 'your inbox was updated'),
+    'a parked goal must not be sent an ordinary nudge, which it cannot act on'
+  );
+
+  // A member that is already working must be left alone, not interrupted.
+  tmux(['send-keys', '-t', kickPane, 'C-c']);
+  execFileSync('sleep', ['1']);
+  tmux(['send-keys', '-t', kickPane, '-l', 'while true; do date +%s.%N; sleep 0.3; done']);
+  tmux(['send-keys', '-t', kickPane, 'Enter']);
+  execFileSync('sleep', ['2']);
+  const busy = runScript(roster, ['kick', kickDir, 'worker']);
+  assert.strictEqual(busy.code, 0, `a working member is fine: ${busy.stderr}`);
+  assert(/ACTIVE/.test(busy.stdout), 'it should report the member as already working');
+  tmux(['kill-window', '-t', kickHost]);
+
   console.log('All roster tests passed successfully!');
 } catch (err) {
   cleanup();
