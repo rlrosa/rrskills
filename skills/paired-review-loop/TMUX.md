@@ -74,6 +74,23 @@ scripts/notify.sh <pane-id> <message>                         # raw, unchecked
 
 `notify.sh` uses the cursor for both checks and falls back to the screen only when a TUI does not move it.
 
+### What is *not* going wrong, measured
+
+Two explanations for this get invented repeatedly. Both are wrong, and believing them sends you off tuning things that do not matter:
+
+- **"`send-keys 'text' Enter` in one call swallows the newline."** It does not. Sent to a program that reads raw bytes, the one-call and two-call forms deliver exactly the same thing — `hello-one\r` and `hello-two\r`. tmux also does not wrap either in bracketed-paste markers.
+- **"Use `C-m` instead of `Enter`."** They are the same byte. Both send `\r`.
+
+What actually matters is the **gap** between the text and the carriage return, and whether the TUI was ready to read at all. That is why `notify.sh` sleeps `PRL_SEND_DELAY` (0.3s) between them and then presses Enter again until the input box empties — not because it uses two calls.
+
+So if you find yourself reasoning about `C-m`, call counts or paste brackets, stop: use `notify.sh` or `roster.sh kick` and let the retry loop do it.
+
+### A typed-but-unsent nudge looks exactly like a delivered one
+
+This is the part worth internalising. The characters appear on screen either way, so **seeing your text is not evidence it was sent**. The message can sit in the input box indefinitely while the pane looks perfectly normal, and the downstream symptom is a member that never armed a watcher and a "lapsed watcher" that was never armed in the first place.
+
+Verify by whether the agent is *doing something*: `roster.sh kick` waits for the pane to start working and refuses to report success otherwise. Reading the pane yourself, the human-legible version of the same signal is the cost and context counters moving — a model that has not received your message has not spent anything.
+
 Write your file first, then notify — otherwise the recipient wakes up and reads the previous round.
 
 Keep the message to one line that names the file to read:
