@@ -21,16 +21,28 @@
 # 15s and wakes you 6 times. Shortening the timeout to "avoid stalling" buys
 # nothing and pays ten times over.
 #
-# RUN IT IN THE FOREGROUND, as the last thing you do in a turn. The call blocks
-# until a file changes or the deadline passes, and then control returns to you.
-# That is the only arrangement that reliably works:
+# HOW YOU ARM IT DECIDES WHAT WAITING COSTS, more than any deadline you pick.
 #
-#   - Backgrounded through a harness's background-task facility it can be
-#     reaped (six consecutive arms killed inside a minute, after four earlier
-#     ones survived their full deadline) - and worse, some harnesses hand you a
-#     turn every time they check on it. One thinker was woken over and over to
-#     say "still nothing" while this script sat there silently doing its job.
-#     Backgrounding converts one cheap wait into a stream of paid wakeups.
+# In Claude Code, background it through the harness (run_in_background) and keep
+# a long deadline: one re-invoke per wait, whichever way it ends. In codex, call
+# it in the foreground as your last action, with a deadline under codex's cap -
+# its background terminals hand you a turn every time they are checked.
+#
+# A foreground deadline longer than your harness's cap on a foreground command
+# is always wrong. It cannot run to completion, so it is severed and bills a
+# turn every time regardless of the number you wrote. One night of that cost
+# about $15 in waiting alone.
+#
+# What never works either way:
+#
+#   - `&` or `nohup`: the process survives and is useless. Something outside
+#     the harness cannot give an agent a turn, so nothing ever wakes you.
+#   - A codex background terminal: it grants a turn on every check, turning one
+#     cheap wait into a stream of paid wakeups.
+#   - A harness background task can also be reaped, which loses the wake
+#     entirely. That risk is worth taking against a certain ~$12 an idle hour
+#     for the foreground alternative; a reaped watcher shows up immediately in
+#     status.sh the next time anyone looks.
 #   - Detached with `nohup` or `setsid` it survives and is useless, because a
 #     process outside the harness cannot give an agent a turn. One such monitor
 #     detected a stall perfectly and wrote its diagnosis to a log nobody read.

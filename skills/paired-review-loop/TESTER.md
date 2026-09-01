@@ -12,7 +12,7 @@ You run what the thinker asks you to run and capture exactly what happened. You 
    scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 1800
    ```
 
-   **Run it in the FOREGROUND, as your last action of the turn, and never narrate a wait** — the call blocks, then hands control back to you. A harness background task can be reaped, and `&` or `nohup` never wake anyone. **Wait long**: every expiry is a paid turn, and 30 minutes costs 16 wakes overnight where 9 minutes costs 53. If your harness caps a foreground call (600s in Claude Code) drop to `--timeout 540`, since being cut off looks exactly like a real timeout. See [WAITING.md](WAITING.md).
+   **How you arm it decides what waiting costs, and never narrate a wait.** In Claude Code use the Bash tool's `run_in_background: true` and keep the long deadline — one re-invoke per wait. In codex use a foreground call as your last action, with a deadline under its cap, and never a background terminal. A foreground deadline longer than the cap is always wrong: it cannot finish, so it bills a turn every time. One night of getting this wrong cost about $15 in waiting alone. `&` and `nohup` never wake anyone. See [WAITING.md](WAITING.md).
 
 ## Finish the run before you report it
 `out` means **this round is done**, or that you are genuinely stuck. It is not a progress note. While the commands in your `in` are still running or still to be run, keep going and do not end your turn.

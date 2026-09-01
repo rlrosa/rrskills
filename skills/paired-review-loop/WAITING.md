@@ -2,48 +2,42 @@
 
 Read the row for **your** agent. Getting this wrong is the single most common way a session stalls, and it fails silently: you believe you are waiting, and nothing is ever going to wake you.
 
-## Run it in the foreground, as your last action
+## Pick foreground or background by what your harness does to each
 
-```
-scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 1800
-```
+This is the decision that costs real money, and it is not a style preference. One session spent **about $15 in a single night purely on waiting** — eight foreground waits, each expiring, each billing a full context re-read to learn nothing.
 
-Call it in the **foreground**, as the last thing you do in the turn. The call blocks until a file changes or the deadline passes, and then **control comes back to you** — which is the only thing that counts.
+The trap is structural rather than a bad parameter: **a foreground deadline longer than your harness's cap on a foreground command is always wrong.** It cannot possibly run to completion, so it is guaranteed to be severed and bill a turn, every single time, no matter what number you wrote.
 
-That last point is the whole idea, and it is easy to get backwards:
+At the measured ~$1.88 a wake:
 
-> In an agent harness, a fallback means *control returns to you*. It does not mean *a process notices something*.
-
-A process that notices a stall and cannot give you a turn has achieved nothing. One session built exactly that: a detached monitor spotted a stall, printed a perfect diagnosis, and wrote it to a log nobody was reading.
-
-## What does not work
-
-| Way of arming it | What happens |
-| --- | --- |
-| **Foreground, blocking** | Works. One call, one wake. Field-tested across a long session without a single failure. |
-| **Harness background task** (Claude Code `run_in_background: true`, codex background terminal) | **Can be reaped**, and on some harnesses **wakes you repeatedly**. See below — this is the expensive one. |
-| **Trailing `&`** | Never works. The shell backgrounds it, your call returns in milliseconds, and nothing is watching the watcher. |
-| **`nohup` / `setsid`** | Survives and is useless. A process outside the harness cannot give an agent a turn. |
-
-## Two knobs, and they are not interchangeable
-
-| | What it decides | What it costs |
+| How it is armed | Wakes per idle hour | Cost per idle hour |
 | --- | --- | --- |
-| `--interval` | How fast a **real reply** wakes you | A few `stat` calls. No model time. Free. |
-| `--timeout` | How often you are woken when **nothing has happened** | A paid turn, every time |
+| Foreground, `--timeout 540` (under a 600s cap) | 6.7 | ~$12.50 |
+| Foreground, `--timeout 1800` (severed at 600s anyway) | 6.0 | ~$11.25 |
+| **Background, `--timeout 1800`** | **2.0** | **~$3.75** |
+| Background, `--timeout 3600` | 1.0 | ~$1.88 |
 
-**Shortening the timeout does not make the loop more responsive.** This is the mistake that burns the most money, and it feels like diligence.
+Note what that table says: in the foreground the deadline barely matters, because the cap decides. Choosing background is worth more than any timeout you can pick.
 
-Measured:
+### So, per harness
 
-| Settings | Real reply arrives in | Idle wakeups per hour |
+| Harness | Arm it | Deadline |
 | --- | --- | --- |
-| `--interval 30 --timeout 60` | 30s | **60** |
-| `--interval 15 --timeout 1800` | 15s | **6** |
+| **Claude Code** | Bash tool **`run_in_background: true`** | 1800s or more. One re-invoke when it exits, whichever way it ends. |
+| **Codex** | **Foreground**, as your last action | Under its foreground cap. Never put it in a background terminal — codex gives you a turn every time it checks on one, which is the expensive failure in the other direction. |
+| **Anything else** | Foreground, last action | Under whatever cap it has. Find the cap first. |
 
-The "responsive" one is twice as slow and ten times more expensive. If you want to react faster, **lower `--interval`** — it is free. The deadline exists only for the case where nobody ever replies, so it should be long.
+### The tell that you got this wrong
 
-`watch.sh` warns below 120s.
+If your wait ended with **your tool reporting a timeout** rather than the script printing a `TIMEOUT <seconds>` line, the script never finished — your harness severed it. You are paying for a wait that could never have completed. Shorten the deadline below the cap, or background it.
+
+`watch.sh` will warn you in advance if you tell it the cap: `PRL_TOOL_TIMEOUT_CEILING=600`.
+
+### On backgrounding being unreliable
+
+It has been reported reaped — one session saw six consecutive arms killed inside a minute after four had survived their full deadline — and that is a real risk: a reaped watcher never wakes you at all. Set against a certain ~$12 an hour for the foreground alternative, take the risk and let the stall be caught by a human prompt and `status.sh`, which diagnoses it in one command.
+
+What is never acceptable is `&` or `nohup`. Those neither wake you nor get tracked; the process survives and is useless, because something outside the harness cannot give an agent a turn.
 
 ## The interval is free. Wakeups are not.
 
@@ -83,9 +77,9 @@ The blocking wait is what absorbs it. While `watch.sh` is running in the foregro
 
 And if `/goal` resumes you while your task is unfinished, that is not a prompt for a status report. Carry on implementing.
 
-## Wait long. Half an hour is the default for a reason
+## Wait long — but only backgrounding makes that mean anything
 
-Every deadline that expires is a paid turn, and it tells you nothing you did not already know. Waiting longer costs nothing; waking costs every time.
+Every deadline that expires is a paid turn, and it tells you nothing you did not already know. Waiting longer costs nothing; waking costs every time. A real reply still arrives within one `--interval` regardless, so the deadline only bounds the case where nobody replies at all.
 
 | `--timeout` | Wakes per hour | Across an 8-hour night |
 | --- | --- | --- |
@@ -93,18 +87,9 @@ Every deadline that expires is a paid turn, and it tells you nothing you did not
 | 540s | 6.7 | 53 |
 | **1800s (default)** | **2** | **16** |
 
-Nothing is lost by the long wait: a real reply still arrives within one `--interval`. The deadline only bounds the case where nobody replies at all, and that case does not get better by being checked more often.
+**Those numbers only hold if the wait can actually run that long.** In the foreground under a 600s cap, 1800s and 540s both cost about six wakes an hour, because the cap decides and the deadline is ignored. The saving is real only for a watcher your harness tracks in the background.
 
-### The one thing that limits it
-
-A **foreground** call is capped by your harness — 600s in Claude Code. A 1800s foreground wait gets severed by the tool at 600s, and a severed call is indistinguishable from a real timeout.
-
-So pick per harness:
-
-- **Foreground under a cap:** use `--timeout 540` (just under 600s), and accept ~53 wakes overnight. Set `PRL_TOOL_TIMEOUT_CEILING=600` and `watch.sh` will warn you when you exceed it.
-- **Background, harness-tracked:** no cap applies, so the 1800s default stands and you get 16. This is the cheaper option where your harness reliably notifies you on exit — but see the reaping and repeated-wake caveats above, and never in a codex background terminal.
-
-If neither is reliable for you, prefer the shorter foreground wait: an ambiguous outcome costs more to untangle than the extra wakes cost to serve.
+So: background it and keep the 1800s default, or foreground it under the cap and accept the wakes. Writing a long deadline into a foreground call buys nothing at all.
 
 ## Why a trailing `&` does not work
 
