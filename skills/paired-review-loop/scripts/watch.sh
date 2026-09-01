@@ -39,7 +39,7 @@
 # process notices something*. A foreground call is what does that. See
 # WAITING.md.
 #
-#   scripts/watch.sh '/tmp/prl-demo/members/*/out' --timeout 540
+#   scripts/watch.sh '/tmp/prl-demo/members/*/out' --timeout 1800
 #
 # Pass --session <dir> and a TIMEOUT also prints who owes what, so a wake with
 # nothing on it still arrives with the answer instead of costing you a second
@@ -87,12 +87,21 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 SESSION=""
 INTERVAL=15
-# Deliberately under the 600s ceiling harnesses tend to put on a foreground
-# command. A deadline past that cap means the tool severs the call before the
-# script finishes, and the agent cannot tell "nothing happened" from "my harness
-# cut me off". A default that produces ambiguous outcomes is worse than none.
-TIMEOUT=540
-PRL_TOOL_TIMEOUT_CEILING="${PRL_TOOL_TIMEOUT_CEILING:-600}"
+# Half an hour. Every expiry is a paid turn, and a deadline expiring tells you
+# nothing you did not already know, so waiting longer is nearly free while
+# waking is not: 30 minutes costs 16 wakes across an overnight run where 9
+# minutes costs 53.
+#
+# Nothing is lost by waiting longer. A real reply still arrives within
+# --interval; the deadline only bounds the case where nobody replies at all.
+TIMEOUT=1800
+
+# Your harness's cap on a FOREGROUND command, if it has one — Claude Code cuts
+# at 600s. Set it and this warns when --timeout would outlive the call, because
+# being severed by the tool is indistinguishable from a real timeout. Unset by
+# default: a watcher your harness tracks in the background has no such cap, and
+# warning on every long wait would be noise.
+PRL_TOOL_TIMEOUT_CEILING="${PRL_TOOL_TIMEOUT_CEILING:-0}"
 # Below this a deadline is being used as a poll, which is what it is not for.
 PRL_SHORT_TIMEOUT="${PRL_SHORT_TIMEOUT:-120}"
 FILES=()
@@ -199,10 +208,11 @@ if [ "$TIMEOUT" -ne 0 ] && [ "$TIMEOUT" -lt "$PRL_SHORT_TIMEOUT" ]; then
   echo "watch: The deadline is a safety net for the case where nobody replies at all." >&2
 fi
 
-if [ "$TIMEOUT" -gt "$PRL_TOOL_TIMEOUT_CEILING" ]; then
-  echo "watch: --timeout ${TIMEOUT}s is above the ${PRL_TOOL_TIMEOUT_CEILING}s a foreground" >&2
-  echo "watch: call usually gets. Your harness may cut this off first, and you will not be" >&2
-  echo "watch: able to tell that from a real timeout. Use --timeout $((PRL_TOOL_TIMEOUT_CEILING - 60))." >&2
+if [ "$PRL_TOOL_TIMEOUT_CEILING" -ne 0 ] && [ "$TIMEOUT" -gt "$PRL_TOOL_TIMEOUT_CEILING" ]; then
+  echo "watch: --timeout ${TIMEOUT}s outlives the ${PRL_TOOL_TIMEOUT_CEILING}s your harness allows a" >&2
+  echo "watch: foreground command. It will cut this off first, and you will not be able to" >&2
+  echo "watch: tell that from a real timeout. Either run it as a tracked background command," >&2
+  echo "watch: which has no such cap, or use --timeout $((PRL_TOOL_TIMEOUT_CEILING - 60))." >&2
 fi
 
 deadline=$((SECONDS + TIMEOUT))

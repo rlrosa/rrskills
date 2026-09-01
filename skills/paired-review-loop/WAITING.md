@@ -5,7 +5,7 @@ Read the row for **your** agent. Getting this wrong is the single most common wa
 ## Run it in the foreground, as your last action
 
 ```
-scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540
+scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 1800
 ```
 
 Call it in the **foreground**, as the last thing you do in the turn. The call blocks until a file changes or the deadline passes, and then **control comes back to you** — which is the only thing that counts.
@@ -39,7 +39,7 @@ Measured:
 | Settings | Real reply arrives in | Idle wakeups per hour |
 | --- | --- | --- |
 | `--interval 30 --timeout 60` | 30s | **60** |
-| `--interval 15 --timeout 540` | 15s | **6** |
+| `--interval 15 --timeout 1800` | 15s | **6** |
 
 The "responsive" one is twice as slow and ten times more expensive. If you want to react faster, **lower `--interval`** — it is free. The deadline exists only for the case where nobody ever replies, so it should be long.
 
@@ -83,16 +83,33 @@ The blocking wait is what absorbs it. While `watch.sh` is running in the foregro
 
 And if `/goal` resumes you while your task is unfinished, that is not a prompt for a status report. Carry on implementing.
 
-## Keep the deadline under your harness's cap
+## Wait long. Half an hour is the default for a reason
 
-Harnesses cap a foreground call — 600s in Claude Code. A `--timeout` above that means **the tool ends your call, not the script**, and you cannot tell "nothing happened" from "I was cut off".
+Every deadline that expires is a paid turn, and it tells you nothing you did not already know. Waiting longer costs nothing; waking costs every time.
 
-So the default is **540s**, safely under. `watch.sh` warns if you ask for more. If your harness has a different cap, stay about a minute below it.
+| `--timeout` | Wakes per hour | Across an 8-hour night |
+| --- | --- | --- |
+| 60s | 60 | 480 |
+| 540s | 6.7 | 53 |
+| **1800s (default)** | **2** | **16** |
+
+Nothing is lost by the long wait: a real reply still arrives within one `--interval`. The deadline only bounds the case where nobody replies at all, and that case does not get better by being checked more often.
+
+### The one thing that limits it
+
+A **foreground** call is capped by your harness — 600s in Claude Code. A 1800s foreground wait gets severed by the tool at 600s, and a severed call is indistinguishable from a real timeout.
+
+So pick per harness:
+
+- **Foreground under a cap:** use `--timeout 540` (just under 600s), and accept ~53 wakes overnight. Set `PRL_TOOL_TIMEOUT_CEILING=600` and `watch.sh` will warn you when you exceed it.
+- **Background, harness-tracked:** no cap applies, so the 1800s default stands and you get 16. This is the cheaper option where your harness reliably notifies you on exit — but see the reaping and repeated-wake caveats above, and never in a codex background terminal.
+
+If neither is reliable for you, prefer the shorter foreground wait: an ambiguous outcome costs more to untangle than the extra wakes cost to serve.
 
 ## Why a trailing `&` does not work
 
 ```
-scripts/watch.sh <file> --timeout 540 &      # WRONG
+scripts/watch.sh <file> --timeout 1800 &      # WRONG
 ```
 
 The shell backgrounds the process and your foreground call returns immediately. Your harness saw a command that finished in milliseconds, so there is nothing left for it to watch, and **nothing will ever hand you a turn**.

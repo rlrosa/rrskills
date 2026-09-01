@@ -53,14 +53,14 @@ Every member owns its own directory and writes nowhere else in the session.
 
    ```
    # thinker — every member's report, quote the pattern
-   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540 --session <dir>
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 1800 --session <dir>
    # member — your own next task
-   scripts/watch.sh <dir>/members/<you>/in --interval 15 --timeout 540
+   scripts/watch.sh <dir>/members/<you>/in --interval 15 --timeout 1800
    ```
 
    Both outcomes exit `0`; the first word of its output is `CHANGED` or `TIMEOUT`. Neither is an error, so a harness never announces a failure that did not happen. Keep **exactly one** watcher armed; kill it when you wake, act, then arm the next one.
 
-   **Run it in the foreground.** One call is one wake: it blocks silently, then prints one line. Backgrounding it makes some harnesses hand you a turn every time they check, turning one cheap wait into a stream of paid wakeups. `--interval` is the script's own stat loop and costs nothing; turns are what cost. See [WAITING.md](WAITING.md).
+   **Run it in the foreground, and wait long.** One call is one wake: it blocks silently, then prints one line. `--interval` is the script's own stat loop and costs nothing; turns are what cost, so the default deadline is 30 minutes — 16 wakes across a night rather than 53 at nine minutes. A real reply still arrives within one interval either way. If your harness caps a foreground call, drop to `--timeout 540`. See [WAITING.md](WAITING.md).
    **Never narrate a wait.** If you wake with nothing to act on, re-arm and stop — do not spend a turn saying "still nothing".
 6. **On a timeout wake, check whose move it is — don't assume.** Run `scripts/status.sh <dir>`. It reads the mailbox timestamps and tells you, per member, whether that member owes a reply or *you* owe the next task. The stall this prevents is both sides believing the other owes something, and you cannot detect that from memory: your memory is the part that is wrong.
 7. **Every turn must either advance the work or block. Never spend one reporting state.**
@@ -85,4 +85,4 @@ Every member owns its own directory and writes nowhere else in the session.
   # write the first task to /tmp/prl-demo/members/worker/in
   scripts/roster.sh brief /tmp/prl-demo worker
   ```
-- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 540` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.
+- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 1800` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.

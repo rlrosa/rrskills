@@ -139,10 +139,10 @@ Write your file, arm a watcher, end your turn.
 
 ```
 # thinker: every member's report. QUOTE the pattern.
-scripts/watch.sh '/tmp/prl-demo/members/*/out' --interval 15 --timeout 540
+scripts/watch.sh '/tmp/prl-demo/members/*/out' --interval 15 --timeout 1800
 
 # member: your own next task
-scripts/watch.sh /tmp/prl-demo/members/worker/in --interval 15 --timeout 540
+scripts/watch.sh /tmp/prl-demo/members/worker/in --interval 15 --timeout 1800
 ```
 
 Both outcomes exit `0`; the first word of its output tells you which — `CHANGED <file>` or `TIMEOUT <seconds>`. Keep exactly one armed, and kill it when you wake before arming the next.

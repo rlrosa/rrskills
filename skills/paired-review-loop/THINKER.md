@@ -9,12 +9,12 @@ You drive a worker through a plan and **verify everything**. The worker does the
 3. Wait on the files — that is the channel. Arm exactly one deadline across every member's report, **quoting the pattern** so the shell leaves it alone:
 
    ```
-   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 540 --session <dir>
+   scripts/watch.sh '<dir>/members/*/out' --interval 15 --timeout 1800 --session <dir>
    ```
 
    Unquoted, on round one, no `out` exists yet, so the shell finds nothing to expand and hands over the literal `*` — a filename that can never appear. Members write their `out` and wait; they do not ring you.
 
-   **Run it in the FOREGROUND, as your last action of the turn** — the call blocks, then hands control back to you. A harness background task can be reaped, and `&` or `nohup` never wake anyone. Keep `--timeout` under your harness's cap on a foreground call (600s in Claude Code, hence the 540s default). See [WAITING.md](WAITING.md).
+   **Run it in the FOREGROUND, as your last action of the turn** — the call blocks, then hands control back to you. A harness background task can be reaped, and `&` or `nohup` never wake anyone. **Wait long**: every expiry is a paid turn, and 30 minutes costs 16 wakes overnight where 9 minutes costs 53. If your harness caps a foreground call (600s in Claude Code) drop to `--timeout 540`, since being cut off looks exactly like a real timeout. See [WAITING.md](WAITING.md).
 4. On any wake, kill your watcher, then **read every member's `out`**, not just the one that changed. Then **verify independently** (ladder below) and decide **PASS** or **REVISE** per member — with the specific reason and how to prove it next round.
    - **If the watcher printed `TIMEOUT`, nothing arrived.** Run `scripts/status.sh <dir>` before concluding anything. It will tell you whether a member owes a reply or *you* owe the next task — and the second case is a stall of your own making, which you cannot see by thinking about it.
 5. **Check the team is alive before you settle in to wait again.** `scripts/roster.sh verify <dir>` watches each pane for a moment and separates a member that is working from one frozen on an approval prompt, dead, or replaced. This is the one thing you use tmux for.
@@ -86,7 +86,7 @@ Work the facts, in this order, and stop guessing:
 ## Do not instruct a short watcher
 When you write a task, you may be tempted to tell the member to "re-arm a 30-second watcher" so it stays responsive. It does the opposite: the deadline has no effect on how fast a reply reaches anyone, and a 60s deadline wakes that member 60 times an hour to say nothing.
 
-Responsiveness is `--interval`, which is free. If you say anything about waiting at all, say `--interval 15 --timeout 540`. Better still, say nothing — the defaults are already that.
+Responsiveness is `--interval`, which is free. If you say anything about waiting at all, say `--interval 15 --timeout 1800`. Better still, say nothing — the defaults are already that.
 
 The same applies to you. Being told "don't let this stall" is not a reason to shorten your own deadline; it is a reason to act on reports promptly when they arrive.
 

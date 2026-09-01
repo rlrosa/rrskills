@@ -538,9 +538,44 @@ try {
     'it should point at the knob that actually controls responsiveness'
   );
 
+  // The default deadline must stay long. Every expiry is a paid turn, and a
+  // short default is what produced 53 wakes overnight where 16 would do. A
+  // behavioural check would have to wait half an hour, so read the default.
+  const watchSource = fs.readFileSync(watch, 'utf8');
+  const declaredDefault = Number(/^TIMEOUT=(\d+)$/m.exec(watchSource)?.[1]);
+  assert(
+    declaredDefault >= 1800,
+    `the default deadline should be long, found ${declaredDefault}s`
+  );
+
+  // The harness-cap warning is opt-in: silent unless the caller declares its
+  // cap, or the long default would warn on every single call.
+  //
+  // Each probe ends itself by touching what it watches. Killing one instead
+  // hangs, because the sleep inside the poll loop holds the pipe open past the
+  // signal - and an un-killed 1800s call blocks for the full half hour.
+  const capWarningsFrom = (env, label) => {
+    const target = path.join(tmpDir, `cap-probe-${label}`);
+    fs.writeFileSync(target, 'initial\n');
+    return spawnSync(
+      'bash',
+      ['-c', '( sleep 1; printf changed > "$1" ) & exec "$2" "$1" --interval 1 --timeout 1800',
+        'bash', target, watch],
+      { encoding: 'utf8', env: { ...testEnv, ...env }, timeout: 30000 }
+    ).stderr || '';
+  };
+
+  assert(
+    !/outlives/.test(capWarningsFrom({}, 'uncapped')),
+    'with no cap declared there should be no cap warning'
+  );
+  assert(
+    /outlives the 600s/.test(capWarningsFrom({ PRL_TOOL_TIMEOUT_CEILING: '600' }, 'capped')),
+    'a declared cap should be enforced'
+  );
+
   // A sensible deadline must stay silent, or the warning becomes noise nobody
-  // reads. Touch the file so the call returns at once instead of waiting out
-  // the 540s it is being asked to accept.
+  // reads. Touch the file so the call returns at once instead of waiting it out.
   const sanePath = path.join(tmpDir, 'sane-target');
   fs.writeFileSync(sanePath, 'initial\n');
   const sane = spawnSync(
