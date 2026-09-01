@@ -14,7 +14,7 @@ You are the only member that edits the repo. Testers, if the thinker started any
    scripts/watch.sh <session>/members/<you>/in --interval 15 --timeout 1800
    ```
 
-   **How you arm it decides what waiting costs, and never narrate a wait.** In Claude Code use the Bash tool's `run_in_background: true` and keep the long deadline — one re-invoke per wait. In codex use a foreground call as your last action, with a deadline under its cap, and never a background terminal. A foreground deadline longer than the cap is always wrong: it cannot finish, so it bills a turn every time. One night of getting this wrong cost about $15 in waiting alone. `&` and `nohup` never wake anyone. See [WAITING.md](WAITING.md).
+   **How you arm it decides what waiting costs, and never narrate a wait.** In Claude Code, run `scripts/monitor.sh` under the Monitor tool with `persistent: true` — plain background commands get reaped, and a Monitor also survives across rounds and only speaks when something changes. In codex, a foreground `watch.sh` as your last action with a deadline under its cap, never a background terminal. A foreground deadline longer than the cap is always wrong: it cannot finish, so it bills a turn every time — one night of that cost about $15 in waiting alone. See [WAITING.md](WAITING.md).
 
 ## Finish the round before you report it
 `out` means **this round is done** — or that you are genuinely stuck and need something you cannot get yourself. It does not mean "here is where I am up to".

@@ -21,11 +21,35 @@ Note what that table says: in the foreground the deadline barely matters, becaus
 
 ### So, per harness
 
-| Harness | Arm it | Deadline |
+| Harness | Arm it | Notes |
 | --- | --- | --- |
-| **Claude Code** | Bash tool **`run_in_background: true`** | 1800s or more. One re-invoke when it exits, whichever way it ends. |
-| **Codex** | **Foreground**, as your last action | Under its foreground cap. Never put it in a background terminal — codex gives you a turn every time it checks on one, which is the expensive failure in the other direction. |
-| **Anything else** | Foreground, last action | Under whatever cap it has. Find the cap first. |
+| **Claude Code** | **`scripts/monitor.sh` under the Monitor tool, `persistent: true`** | The right answer. Not reaped, stays armed across rounds, and costs a turn only when something actually changes. |
+| **Codex** | `scripts/watch.sh` in the **foreground**, as your last action | Deadline under its foreground cap. Never a background terminal — codex grants a turn every time it checks on one. |
+| **Anything else** | `watch.sh`, foreground, last action | Find the cap first, and stay under it. |
+
+### Claude Code: use a persistent Monitor, not a background command
+
+Plain background commands **are** reaped, repeatedly — `Background command … was stopped`, mid-wait, over and over. A persistent Monitor is not, and it is better than a watcher in two further ways: it survives across rounds, so there is nothing to re-arm and nothing to forget; and it reports transitions rather than deadlines, so a quiet hour costs nothing at all.
+
+```
+Monitor(
+  command: "<skill>/scripts/monitor.sh /tmp/prl-demo --interval 30",
+  description: "worker round completions and stalls",
+  persistent: true,
+)
+```
+
+`monitor.sh` prints one line per state change and stays silent in between:
+
+```
+REPORTED worker - wrote its out; you owe the next task
+STALLED  worker - has the task; owes a reply - quiet for 22m and its pane is idle
+EXITED   worker - its agent quit; nothing will answer
+```
+
+A new state has to survive two consecutive polls before it is announced, because a pane whose foreground command flickers would otherwise produce a stream — and a monitor that emits too much gets stopped for noise, which puts you back where you started.
+
+**`REPORTED` is your cue and your obligation.** It means a round finished and you owe the next task; see the rule about not ending a turn while you owe one.
 
 ### The tell that you got this wrong
 

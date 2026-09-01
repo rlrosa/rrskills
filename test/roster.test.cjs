@@ -1,4 +1,4 @@
-const { execFileSync, spawnSync } = require('child_process');
+const { execFileSync, spawnSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
@@ -9,6 +9,7 @@ const roster = path.join(scriptsDir, 'roster.sh');
 const notify = path.join(scriptsDir, 'notify.sh');
 const watch = path.join(scriptsDir, 'watch.sh');
 const status = path.join(scriptsDir, 'status.sh');
+const monitor = path.join(scriptsDir, 'monitor.sh');
 
 function hasTmux() {
   try {
@@ -648,6 +649,59 @@ try {
   assert.strictEqual(busy.code, 0, `a working member is fine: ${busy.stderr}`);
   assert(/ACTIVE/.test(busy.stdout), 'it should report the member as already working');
   tmux(['kill-window', '-t', kickHost]);
+
+  console.log('Running test 20: monitor speaks on transitions and stays quiet otherwise...');
+  // A persistent monitor replaces the re-armed watcher on harnesses that reap
+  // background commands. Its whole value is that a quiet hour costs nothing,
+  // so the test is about what it does NOT say.
+  const monDir = path.join(tmpDir, 'prl-monitor');
+  runScript(roster, ['init', monDir]);
+  const monHost = tmux(['new-window', '-d', '-P', '-F', '#{pane_id}']);
+  const monPane = tmux(['split-window', '-h', '-d', '-t', monHost, '-P', '-F', '#{pane_id}']);
+  tmux(['send-keys', '-t', monPane, '-l', 'cat']);
+  tmux(['send-keys', '-t', monPane, 'Enter']);
+  execFileSync('sleep', ['1']);
+  runScript(roster, ['add', monDir, 'worker', 'worker', monPane, tmpDir, 'cat']);
+
+  const monLog = path.join(tmpDir, 'monitor.log');
+  const monProc = spawn(monitor, [monDir, '--interval', '1'], {
+    env: testEnv,
+    stdio: ['ignore', fs.openSync(monLog, 'w'), 'ignore'],
+    detached: true,
+  });
+  try {
+    // Each poll costs about two seconds, because status.sh samples the pane to
+    // tell a working member from a frozen one. Give every transition room for
+    // a couple of polls rather than racing it.
+    execFileSync('sleep', ['5']);
+    fs.writeFileSync(path.join(monDir, 'members', 'worker', 'in'), 'TASK\n');
+    execFileSync('sleep', ['6']);
+    fs.writeFileSync(path.join(monDir, 'members', 'worker', 'out'), 'REPORT\n');
+    execFileSync('sleep', ['6']);
+  } finally {
+    process.kill(-monProc.pid, 'SIGKILL');
+  }
+
+  const events = fs.readFileSync(monLog, 'utf8').trim().split('\n').filter(Boolean);
+  // Roughly a dozen polls happened; anything close to that many lines means it
+  // is reporting state rather than change, which is what gets a monitor
+  // stopped for noise.
+  // Roughly six polls happened per phase; anything approaching that many lines
+  // means it is reporting state rather than change.
+  assert(events.length <= 5, `it should speak only on transitions, got:\n${events.join('\n')}`);
+  assert(
+    events.some((line) => line.startsWith('UNSTARTED')),
+    `a registered member with no task yet is UNSTARTED, got:\n${events.join('\n')}`
+  );
+  assert(
+    events.some((line) => line.startsWith('REPORTED')),
+    `writing out must raise REPORTED, which is the thinker's cue, got:\n${events.join('\n')}`
+  );
+  assert(
+    !events.some((line, index) => index > 0 && line === events[index - 1]),
+    `it must never repeat a state it has already announced:\n${events.join('\n')}`
+  );
+  tmux(['kill-window', '-t', monHost]);
 
   console.log('All roster tests passed successfully!');
 } catch (err) {
