@@ -21,6 +21,7 @@ The team is whatever you ask for. A single worker is the common case; a worker p
 - **Worker / implementer →** read **[WORKER.md](WORKER.md)**.
 - **Tester →** read **[TESTER.md](TESTER.md)**.
 - **Everyone, before you wait →** read **[WAITING.md](WAITING.md)**. Arming a watcher the wrong way is the most common way a session stalls, and it fails silently — you believe you are waiting and nothing will ever wake you. The right way differs per agent.
+- **Claude thinker and Claude member? →** read **[CLAUDE-MESSAGING.md](CLAUDE-MESSAGING.md)**. `SendMessage` is easier than tmux and file polling. It only signals; files still carry the content. Codex and agy members are unaffected.
 - **Running in tmux? →** also read **[TMUX.md](TMUX.md)** — how a human hands panes over, and how the thinker reaches a member that has gone quiet.
 
 ## Roles
@@ -46,7 +47,7 @@ Every member owns its own directory and writes nowhere else in the session.
 1. **Exchange files are overwritten each round and self-contained.** The top of the file IS the current task/verdict — never append history and bury the current ask; buried instructions stall the loop.
 2. **Evidence = the exact command + its complete, unedited output + exit code**, saved to your own `evidence/NN-*.txt`. A prose summary is never proof. If something can't run, write `NOT RUN: <reason>` — never fake it.
 3. **Green unit tests ≠ a working system.** Integration / a real human-run end-to-end is where regressions hide; require it before sign-off.
-4. **The files are the channel. Everyone writes a file and waits on a file.** There is no other way to send anything. A message typed into someone's terminal is not part of the conversation and leaves no record.
+4. **The files are the channel. Everyone writes a file and waits on a file.** There is no other way to send content. (Between two Claude Code sessions, a `SendMessage` may ring the doorbell, but it only points at a file; see [CLAUDE-MESSAGING.md](CLAUDE-MESSAGING.md).) A message typed into someone's terminal is not part of the conversation and leaves no record.
    - **Members never type into anyone's pane.** Write your `out`, then wait on your `in`.
    - **Only the thinker touches tmux**, and only to check a quiet member is alive or to poke one that has stopped answering. See [TMUX.md](TMUX.md).
 5. **Never end a turn waiting without an armed deadline.** Waiting means a watcher is running; believing you are waiting is not waiting.

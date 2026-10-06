@@ -15,6 +15,7 @@ You are the only member that edits the repo. Testers, if the thinker started any
    ```
 
    **How you arm it decides what waiting costs, and never narrate a wait.** In Claude Code, run `scripts/monitor.sh` under the Monitor tool with `persistent: true` — plain background commands get reaped, and a Monitor also survives across rounds and only speaks when something changes. In codex, a foreground `watch.sh` as your last action with a deadline under its cap, never a background terminal. A foreground deadline longer than the cap is always wrong: it cannot finish, so it bills a turn every time — one night of that cost about $15 in waiting alone. See [WAITING.md](WAITING.md).
+   **Claude worker under a Claude thinker (claude-claude):** after writing `out`, reply with one `SendMessage` pointing at it instead of arming a watcher. See [CLAUDE-MESSAGING.md](CLAUDE-MESSAGING.md). If your thinker is not Claude, or you are agy or codex, keep the flow above.
 
 ## Finish the round before you report it
 `out` means **this round is done** — or that you are genuinely stuck and need something you cannot get yourself. It does not mean "here is where I am up to".
