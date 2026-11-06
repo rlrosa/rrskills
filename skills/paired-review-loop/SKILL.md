@@ -21,6 +21,7 @@ The team is whatever you ask for. A single worker is the common case; a worker p
 - **Worker / implementer →** read **[WORKER.md](WORKER.md)**.
 - **Tester →** read **[TESTER.md](TESTER.md)**.
 - **Everyone, before you wait →** read **[WAITING.md](WAITING.md)**. Arming a watcher the wrong way is the most common way a session stalls, and it fails silently — you believe you are waiting and nothing will ever wake you. The right way differs per agent.
+- **Running Pi in any role? →** also read **[PI.md](PI.md)** for skill invocation, file communication, and foreground waiting.
 - **Claude thinker and Claude member? →** read **[CLAUDE-MESSAGING.md](CLAUDE-MESSAGING.md)**. `SendMessage` is easier than tmux and file polling. It only signals; files still carry the content. Codex and agy members are unaffected.
 - **Running in tmux? →** also read **[TMUX.md](TMUX.md)** — how a human hands panes over, and how the thinker reaches a member that has gone quiet.
 

@@ -25,6 +25,7 @@ Note what that table says: in the foreground the deadline barely matters, becaus
 | --- | --- | --- |
 | **Claude Code** | **`scripts/monitor.sh` under the Monitor tool, `persistent: true`** | The right answer. Not reaped, stays armed across rounds, and costs a turn only when something actually changes. |
 | **Codex** | `scripts/watch.sh` in the **foreground**, as your last action | Deadline under its foreground cap. Never a background terminal — codex grants a turn every time it checks on one. |
+| **Pi** | `scripts/watch.sh` in a **foreground `bash` tool call**, as your last action | The tool timeout must exceed the watcher's deadline. See [PI.md](PI.md) for tool-call examples; no detached process or Monitor tool. |
 | **Anything else** | `watch.sh`, foreground, last action | Find the cap first, and stay under it. |
 
 ### Claude Code: use a persistent Monitor, not a background command

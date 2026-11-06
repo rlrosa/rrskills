@@ -211,6 +211,37 @@ try {
     'the briefing should point at the first task'
   );
 
+  console.log('Checking briefing skill syntax for each member CLI...');
+  const memberCliCases = [
+    ['pi', 'pi --model example', '/skill:paired-review-loop'],
+    ['pi-path', '/home/example/.local/bin/pi --model example', '/skill:paired-review-loop'],
+    ['codex', 'codex', '$paired-review-loop'],
+    ['claude', 'claude --model example', '/paired-review-loop'],
+    ['agy', 'agy', '/paired-review-loop'],
+  ];
+  const cliSessionDir = path.join(tmpDir, 'prl-cli-syntax');
+  assert.strictEqual(runScript(roster, ['init', cliSessionDir]).code, 0);
+  for (const [memberName, agentCommand, skillCommand] of memberCliCases) {
+    const registered = runScript(roster, [
+      'add', cliSessionDir, memberName, 'worker', handedOver.worker, tmpDir, agentCommand,
+    ]);
+    assert.strictEqual(registered.code, 0, registered.stderr);
+    const cliBriefed = runScript(roster, ['brief', cliSessionDir, memberName], {
+      PRL_BUSY_SAMPLE: '0', PRL_SEND_DELAY: '0',
+    });
+    assert.strictEqual(cliBriefed.code, 0, cliBriefed.stderr);
+    const deliveredBrief = tmux(['capture-pane', '-p', '-t', handedOver.worker]).replace(/\n/g, '');
+    assert(
+      deliveredBrief.includes(`${skillCommand} You are the WORKER named '${memberName}'.`),
+      `${agentCommand} must receive ${skillCommand}; pane contained: ${deliveredBrief}`
+    );
+  }
+  assert.strictEqual(
+    runScript(roster, ['add', teamDir, 'worker', 'worker', handedOver.worker, tmpDir, 'cat']).code,
+    0,
+    'restore the worker pane identity after checking CLI-specific briefings'
+  );
+
   console.log('Running test 7: --role rings every tester and no one else...');
   const broadcast = runScript(notify, ['--session', teamDir, '--role', 'tester', 'prl: run the suite']);
   assert.strictEqual(broadcast.code, 0, `broadcast should reach both testers: ${broadcast.stderr}`);

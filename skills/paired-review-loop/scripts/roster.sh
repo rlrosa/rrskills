@@ -221,8 +221,9 @@ case "$VERB" in
     MEMBER_DIR="$SESSION/members/$NAME"
     THINKER_PANE=$("$SCRIPT_DIR/session.sh" get "$SESSION" PRL_THINKER_PANE 2>/dev/null || echo unknown)
 
-    # Codex invokes skills with $name; Claude and AGY use /name.
+    # Pi invokes skills with /skill:name; Codex uses $name; Claude and AGY use /name.
     case "$(basename "${AGENT_CMD%% *}")" in
+      pi) SKILL_PREFIX='/skill:' ;;
       codex) SKILL_PREFIX='$' ;;
       *) SKILL_PREFIX='/' ;;
     esac
