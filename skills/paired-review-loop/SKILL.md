@@ -24,6 +24,7 @@ The team is whatever you ask for. A single worker is the common case; a worker p
 - **Running Pi in any role? →** also read **[PI.md](PI.md)** for skill invocation, file communication, and foreground waiting.
 - **Claude thinker and Claude member? →** read **[CLAUDE-MESSAGING.md](CLAUDE-MESSAGING.md)**. `SendMessage` is easier than tmux and file polling. It only signals; files still carry the content. Codex and agy members are unaffected.
 - **Running in tmux? →** also read **[TMUX.md](TMUX.md)** — how a human hands panes over, and how the thinker reaches a member that has gone quiet.
+- **Linux, and you want to stop arming recurring watchers? →** read **[BROKER.md](BROKER.md)**. An opt-in broker process wakes each side the moment a mailbox changes; the files stay the source of truth, and with it not running nothing changes.
 
 ## Roles
 - **worker** — implements. **The only member that edits the repo.**
@@ -51,7 +52,7 @@ Every member owns its own directory and writes nowhere else in the session.
 4. **The files are the channel. Everyone writes a file and waits on a file.** There is no other way to send content. (Between two Claude Code sessions, a `SendMessage` may ring the doorbell, but it only points at a file; see [CLAUDE-MESSAGING.md](CLAUDE-MESSAGING.md).) A message typed into someone's terminal is not part of the conversation and leaves no record.
    - **Members never type into anyone's pane.** Write your `out`, then wait on your `in`.
    - **Only the thinker touches tmux**, and only to check a quiet member is alive or to poke one that has stopped answering. See [TMUX.md](TMUX.md).
-5. **Never end a turn waiting without an armed deadline.** Waiting means a watcher is running; believing you are waiting is not waiting.
+5. **Never end a turn waiting without an armed deadline — or a running broker.** Waiting means a watcher is running, or the broker will wake you; believing you are waiting is not waiting.
 
    ```
    # thinker — every member's report, quote the pattern
@@ -87,4 +88,4 @@ Every member owns its own directory and writes nowhere else in the session.
   # write the first task to /tmp/prl-demo/members/worker/in
   scripts/roster.sh brief /tmp/prl-demo worker
   ```
-- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 1800` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. Writing `out` **is** how you reply — don't also try to type at the thinker.
+- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 1800` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. With the opt-in [broker](BROKER.md) running instead, write `out` and yield — it wakes you on your next `in`. Writing `out` **is** how you reply — don't also try to type at the thinker.

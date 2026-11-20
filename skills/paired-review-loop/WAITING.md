@@ -2,6 +2,28 @@
 
 Read the row for **your** agent. Getting this wrong is the single most common way a session stalls, and it fails silently: you believe you are waiting, and nothing is ever going to wake you.
 
+## Broker mode (opt-in, Linux): yield instead of arming
+
+When the opt-in [broker](BROKER.md) is running for the session, the watcher is
+not yours to arm.
+The broker watches the mailbox files and types a one-line pointer into your
+pane the moment the other side writes.
+Your loop is: write your file, **end your turn**, and act on the wake when it
+lands.
+No recurring watcher, no idle model turns.
+
+Two rules keep this honest:
+
+- **Check the broker is actually running before you rely on it** — `scripts/broker.sh status --session <dir>`.
+  If it is down, nobody will wake you; arm `watch.sh` the normal way instead.
+- **The wake is a pointer, not content.**
+  Read the file it names.
+  If you wake and the broker's log shows it could not reach your pane, say so
+  in your `out` and fall back to a watcher.
+
+Everything below is the fallback: the protocol with no broker, or with a
+broker that is down.
+
 ## Pick foreground or background by what your harness does to each
 
 This is the decision that costs real money, and it is not a style preference. One session spent **about $15 in a single night purely on waiting** — eight foreground waits, each expiring, each billing a full context re-read to learn nothing.
