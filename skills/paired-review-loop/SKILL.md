@@ -88,4 +88,4 @@ Every member owns its own directory and writes nowhere else in the session.
   # write the first task to /tmp/prl-demo/members/worker/in
   scripts/roster.sh brief /tmp/prl-demo worker
   ```
-- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 1800` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. With the opt-in [broker](BROKER.md) running instead, write `out` and yield — it wakes you on your next `in`. Writing `out` **is** how you reply — don't also try to type at the thinker.
+- **Member:** read your `in`; do the task; write `evidence/NN-*.txt` + `out`; then arm `scripts/watch.sh <session>/members/<you>/in --timeout 1800` the way your harness tracks background commands (see [WAITING.md](WAITING.md)) and end your turn. With the opt-in [broker](BROKER.md) running instead: read `in` and ack it (`scripts/ack.sh <session> <you> in`), do the work, write `out`, and yield — it wakes you on your next `in`. Writing `out` **is** how you reply — don't also try to type at the thinker.

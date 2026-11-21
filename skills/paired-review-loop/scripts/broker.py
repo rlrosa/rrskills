@@ -8,9 +8,12 @@ recipient's registered pane, and when a send cannot be confirmed it keeps the
 work pending with bounded retries instead of dropping it.
 
 A wake is a pointer, never content: the message names the file to read.  A
-wake is considered acknowledged only when the recipient's reply mailbox gets
-a newer revision (a member's `out`, the thinker's next `in`), because typing
-a message is not proof of reading.
+wake is considered acknowledged only by an explicit ack of the exact revision
+read: the reader runs `scripts/ack.sh <session> <name> <mailbox>` after
+reading, which records the file's mtime/size/sha256 next to it.  Typing a
+message is not proof of reading, and a reply is not an ack either — the
+thinker may accept a final report without posting another task, and a worker
+may read a task and then work longer than any nudge window allows.
 
 Linux only: file changes are detected with inotify.  The broker never creates
 panes, never restarts agents, and never touches a pane that is not registered
@@ -27,6 +30,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import errno
 import hashlib
 import json
 import os
@@ -95,10 +99,12 @@ _RETRY_CAP_SECONDS = 60.0
 # Deferrals back off to a cap so a long build does not hammer the pane.
 _DEFERRAL_CAP_SECONDS = 30.0
 
-# A delivered wake that is not acknowledged (reply mailbox not rewritten)
-# within this long is re-nudged, up to MAX_RENUDGES times, after which the
-# stall is reported to the counterpart.
-_ACK_TIMEOUT_SECONDS = 600
+# A delivered wake that is not acknowledged (no matching .ack for the current
+# revision) within this long is re-nudged, up to MAX_RENUDGES times, after
+# which the stall is reported to the counterpart.  PRL_BROKER_ACK_TIMEOUT_
+# SECONDS overrides it (tests use a short value; nothing else reads it).
+_ACK_TIMEOUT_ENV = "PRL_BROKER_ACK_TIMEOUT_SECONDS"
+_DEFAULT_ACK_TIMEOUT_SECONDS = 600.0
 _MAX_RENUDGES = 2
 
 # A pane whose screen shows this marker has parked a codex /goal.  A plain
@@ -138,9 +144,9 @@ def file_revision(path: Path) -> tuple[int, int, str] | None:
 class WakeState:
     """One outstanding wake: work that is in a mailbox but not yet acknowledged.
 
-    task_mtime_ns is the newest mailbox revision this wake represents.  A wake
-    is acknowledged when the recipient's reply mailbox carries a newer mtime,
-    and cleared at that point.
+    task_mtime_ns is the newest mailbox revision this wake represents.  The
+    wake is acknowledged when the reader's .ack file records the mailbox's
+    current revision, and cleared at that point.
     """
 
     task_mtime_ns: int
@@ -212,9 +218,11 @@ class MemberState:
     name: str
     instance: AgentInstance | None
     revisions: dict[str, tuple[int, int, str] | None] = field(default_factory=dict)
-    # Wake owed to the member (its in / in-addendum is newer than its out).
+    # Wake owed to the member (its in / in-addendum is not acked at its
+    # current revision).
     member_wake: WakeState | None = None
-    # Wake owed to the thinker (the member's out is newer than its in).
+    # Wake owed to the thinker (the member's out is not acked at its current
+    # revision).
     thinker_wake: WakeState | None = None
     # Set after the counterpart has been told the member is parked, so the
     # notice goes out once; cleared when the pane is no longer parked.
@@ -241,6 +249,37 @@ def _process_start_id(pid: int) -> str | None:
     if len(fields) < 20:
         return None
     return f"{pid}:{fields[19]}"
+
+
+def _process_ppid(pid: int) -> int | None:
+    """Return the parent pid from /proc/<pid>/stat, or None when it is gone.
+    The parent is field 4, i.e. the second field after the closing ')'."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            raw = handle.read().decode(errors="replace")
+    except OSError:
+        return None
+    close_paren = raw.rfind(")")
+    fields = raw[close_paren + 2 :].split()
+    if len(fields) < 2 or not fields[1].isdigit():
+        return None
+    return int(fields[1])
+
+
+def _is_descendant(pid: int, ancestor_pid: int) -> bool:
+    """Walk the /proc ppid chain; True when pid is ancestor_pid itself or one
+    of its descendants.  Bounded by a seen-set so a ppid cycle cannot loop."""
+    current = pid
+    seen = set()
+    while current not in seen:
+        seen.add(current)
+        if current == ancestor_pid:
+            return True
+        parent = _process_ppid(current)
+        if parent is None or parent <= 1:
+            return False
+        current = parent
+    return False
 
 
 class WakeBroker:
@@ -276,6 +315,16 @@ class WakeBroker:
         self._inotify_fd = -1
         self._watched_paths: set[Path] = set()
         self._watch_descriptors: dict[int, Path] = {}
+        self._ack_timeout_seconds = self._ack_timeout_from_env()
+
+    @staticmethod
+    def _ack_timeout_from_env() -> float:
+        raw = os.environ.get(_ACK_TIMEOUT_ENV, "")
+        try:
+            value = float(raw)
+        except ValueError:
+            return _DEFAULT_ACK_TIMEOUT_SECONDS
+        return value if value > 0 else _DEFAULT_ACK_TIMEOUT_SECONDS
 
     # ------------------------------------------------------------------ log
 
@@ -444,14 +493,41 @@ class WakeBroker:
                 if revision is not None and revision[1] > 0:
                     self.log(f"{member.name}: {mailbox} updated (rev {revision[2][:12]})")
 
+    def _ack_path(self, member: MemberState, mailbox: str) -> Path:
+        return member.mailbox_path(self.session_dir, mailbox).with_name(
+            member.mailbox_path(self.session_dir, mailbox).name + ".ack"
+        )
+
+    def _ack_matches(self, member: MemberState, mailbox: str) -> bool:
+        """True when the mailbox's current revision is the one the .ack file
+        recorded.  A rewrite after the ack changes the revision, so a stale
+        ack can never suppress a newer revision."""
+        revision = member.revisions.get(mailbox)
+        if revision is None or revision[1] == 0:
+            return True  # an empty or absent mailbox owes no ack
+        ack_path = self._ack_path(member, mailbox)
+        if not ack_path.is_file():
+            return False
+        try:
+            fields = ack_path.read_text().split()
+        except OSError:
+            return False
+        if len(fields) != 3:
+            return False
+        try:
+            return (int(fields[0]), int(fields[1]), fields[2]) == revision
+        except ValueError:
+            return False
+
     def _reconcile_wakes(self, member: MemberState) -> None:
         """Create, coalesce, and acknowledge this member's two wakes.
 
-        The rule is the one status.sh uses, made explicit: in (or
-        in-addendum) newer than out means the member owes a reply, so the
-        member is owed a wake; out newer than in means the thinker owes the
-        next task, so the thinker is owed a wake.  The two cannot both hold,
-        so at most one direction is pending per member.
+        A wake exists while any mailbox the recipient owes a read on is not
+        acked at its current revision: for the member, `in` and (when
+        non-empty) `in-addendum`; for the thinker, `out`.  Acknowledgement is
+        explicit — the reader runs ack.sh after reading — so a final report
+        is cleared without another task being posted, and a long task never
+        earns a false re-nudge.
         """
         in_revision = member.revisions.get("in")
         addendum_revision = member.revisions.get("in-addendum")
@@ -464,14 +540,17 @@ class WakeBroker:
             if revision is not None and revision[1] > 0
         ]
         task_mtime = max(revision[0] for revision in task_revisions) if task_revisions else None
+        unacked_task_mailboxes = [
+            mailbox
+            for mailbox, revision in (("in", in_revision), ("in-addendum", addendum_revision))
+            if revision is not None and revision[1] > 0 and not self._ack_matches(member, mailbox)
+        ]
 
-        member_wake_needed = task_mtime is not None and (
-            out_revision is None or out_revision[1] == 0 or out_revision[0] < task_mtime
-        )
+        member_wake_needed = task_mtime is not None and len(unacked_task_mailboxes) > 0
         if member_wake_needed:
             if member.member_wake is None:
                 member.member_wake = WakeState(task_mtime_ns=task_mtime)
-                self.log(f"{member.name}: pending wake to member (in newer than out)")
+                self.log(f"{member.name}: pending wake to member (unacked task)")
             elif task_mtime > member.member_wake.task_mtime_ns:
                 # Newer work while a wake is outstanding: fold it in rather
                 # than queue a second wake for the same pane.
@@ -482,16 +561,16 @@ class WakeBroker:
                 member.member_wake.next_attempt_at = now
                 self.log(f"{member.name}: newer task while a wake was pending; re-arming")
         elif member.member_wake is not None:
-            self.log(f"{member.name}: task acknowledged (out is newer than in)")
+            self.log(f"{member.name}: task acknowledged (acked revision matches)")
             member.member_wake = None
 
         reply_revision = out_revision if out_revision and out_revision[1] > 0 else None
         if reply_revision is not None:
-            thinker_wake_needed = task_mtime is None or reply_revision[0] > task_mtime
+            thinker_wake_needed = not self._ack_matches(member, "out")
             if thinker_wake_needed:
                 if member.thinker_wake is None:
                     member.thinker_wake = WakeState(task_mtime_ns=reply_revision[0])
-                    self.log(f"{member.name}: pending wake to thinker (out newer than in)")
+                    self.log(f"{member.name}: pending wake to thinker (unacked out)")
                 elif reply_revision[0] > member.thinker_wake.task_mtime_ns:
                     member.thinker_wake.task_mtime_ns = reply_revision[0]
                     member.thinker_wake.attempts = 0
@@ -500,7 +579,7 @@ class WakeBroker:
                     member.thinker_wake.next_attempt_at = now
                     self.log(f"{member.name}: newer report while a wake was pending; re-arming")
             elif member.thinker_wake is not None:
-                self.log(f"{member.name}: report acknowledged (in is newer than out)")
+                self.log(f"{member.name}: report acknowledged (acked revision matches)")
                 member.thinker_wake = None
         elif member.thinker_wake is not None:
             self.log(f"{member.name}: report removed; dropping pending wake to thinker")
@@ -509,25 +588,44 @@ class WakeBroker:
     def _wake_message(self, member: MemberState, direction: str) -> str:
         if direction == "thinker":
             return f"prl: {member.name} reported - read {member.mailbox_path(self.session_dir, 'out')}"
-        out_revision = member.revisions.get("out")
-        out_mtime = out_revision[0] if out_revision else 0
-        changed_mailboxes = []
-        for mailbox in ("in", "in-addendum"):
-            revision = member.revisions.get(mailbox)
-            if revision is not None and revision[1] > 0 and revision[0] > out_mtime:
-                changed_mailboxes.append(member.mailbox_path(self.session_dir, mailbox))
-        if not changed_mailboxes:
-            changed_mailboxes.append(member.mailbox_path(self.session_dir, "in"))
-        if len(changed_mailboxes) == 1 and changed_mailboxes[0].name == "in-addendum":
-            return f"prl: new addendum - read {changed_mailboxes[0]}"
-        return f"prl: your inbox was updated - read {' then '.join(str(p) for p in changed_mailboxes)}"
+        unacked_mailboxes = [
+            mailbox
+            for mailbox in ("in", "in-addendum")
+            if (revision := member.revisions.get(mailbox)) is not None
+            and revision[1] > 0
+            and not self._ack_matches(member, mailbox)
+        ]
+        if not unacked_mailboxes:
+            unacked_mailboxes = ["in"]
+        paths = [member.mailbox_path(self.session_dir, mailbox) for mailbox in unacked_mailboxes]
+        if len(paths) == 1 and paths[0].name == "in-addendum":
+            return f"prl: new addendum - read {paths[0]}"
+        return f"prl: your inbox was updated - read {' then '.join(str(p) for p in paths)}"
+
+    def _read_agent_identity(self, name: str) -> str | None:
+        """Return the explicitly registered agent identity for a member as
+        "<pid>:<starttime>", or None when no identity is recorded.  Written by
+        scripts/register-agent.sh; it pins the exact process the broker may
+        wake, so an agent that exits to its shell or is restarted is caught
+        even though the pane (and its shell) is unchanged."""
+        identity_path = self.state_path.parent / "agents" / name
+        if not identity_path.is_file():
+            return None
+        try:
+            fields = identity_path.read_text().split()
+        except OSError:
+            return None
+        if len(fields) != 2 or not fields[0].isdigit():
+            return None
+        return f"{fields[0]}:{fields[1]}"
 
     def _validate_instance(self, instance: AgentInstance) -> tuple[str, str] | None:
         """Check a registered pane before anything is typed into it.
 
         Returns (kind, detail) when the pane must not receive a wake.  kinds:
-        gone / exited / mismatch / restarted are terminal for the instance;
-        parked is not — a parked pane can be resumed by hand and then woken.
+        gone / exited / mismatch / restarted / agent-gone are terminal for the
+        instance; parked is not — a parked pane can be resumed by hand and
+        then woken.
         """
         if not self._pane_exists(instance.pane):
             return ("gone", f"pane {instance.pane} closed")
@@ -559,17 +657,67 @@ class WakeBroker:
                 "mismatch",
                 f"pane {instance.pane} is running '{foreground_command}', not '{instance.agent_command}'",
             )
+        # The explicit identity is stricter than the name: it pins the exact
+        # process, so an agent that exits to its shell or is restarted as a
+        # new process of the same binary is caught here, while the pane-level
+        # checks above still catch a shell prompt or a different program in
+        # the foreground.
+        if instance.name != "thinker":
+            registered_identity = self._read_agent_identity(instance.name)
+            if registered_identity is not None:
+                reg_pid_raw, _, reg_start = registered_identity.partition(":")
+                if not reg_pid_raw.isdigit() or _process_start_id(int(reg_pid_raw)) != registered_identity:
+                    return (
+                        "agent-gone",
+                        f"registered agent {registered_identity} has exited or been replaced "
+                        f"(pane {instance.pane})",
+                    )
+                if instance.pane_pid is not None and not _is_descendant(
+                    int(reg_pid_raw), instance.pane_pid
+                ):
+                    return (
+                        "agent-gone",
+                        f"registered agent {registered_identity} is no longer inside "
+                        f"pane {instance.pane}",
+                    )
         if _PARKED_GOAL_MARKER in self._pane_capture(instance.pane):
             return ("parked", f"pane {instance.pane} shows a parked goal")
         return None
+
+    def _guarded_send(self, instance: AgentInstance, message: str) -> tuple[str, tuple[str, str] | None]:
+        """The single path every automatic send takes: run the pre-send
+        checks, then type the pointer.
+
+        Returns (outcome, problem) where outcome is:
+          sent         - typed and the pane visibly reacted
+          unconfirmed  - typed, but the pane did not visibly react
+          deferred     - parked / occupied input / mid-turn; nothing was typed
+          deregistered - the instance failed a terminal check; nothing was
+                         typed; problem names the kind and detail
+        """
+        problem = self._validate_instance(instance)
+        if problem is not None:
+            kind, _detail = problem
+            if kind in ("gone", "exited", "mismatch", "restarted", "agent-gone"):
+                return ("deregistered", problem)
+            return ("deferred", problem)
+        cursor_column = self._pane_format(instance.pane, "#{cursor_x}")
+        if cursor_column.isdigit() and int(cursor_column) > _EMPTY_INPUT_MAX_COLUMN:
+            return ("deferred", ("occupied", f"input line occupied (cursor column {cursor_column})"))
+        if self._pane_is_busy(instance.pane):
+            return ("deferred", ("busy", "pane is mid-turn"))
+        if self._send_pointer(instance.pane, message):
+            return ("sent", None)
+        return ("unconfirmed", None)
 
     def _notify_counterpart(self, member_name: str, failed_direction: str, detail: str) -> None:
         """Tell the other side that a wake could not be delivered.
 
         failed_direction names the side that failed ("member" or "thinker");
-        the notice goes the other way.  One best-effort send: if the
-        counterpart is also unreachable the failure stays in the broker log
-        and in broker.sh status, which is the visible record.
+        the notice goes the other way, through the same guarded send path as
+        everything else — it never types into a shell or over unsent text.  A
+        notice that cannot be sent stays in the broker log and in broker.sh
+        status, which remain the visible record.
         """
         if failed_direction == "member":
             target = self.thinker
@@ -582,41 +730,56 @@ class WakeBroker:
             if target is None:
                 self.log(f"{member_name} has no pane to tell about: {detail}")
                 return
-        if target.state != "registered" or not self._pane_exists(target.pane):
-            self.log(f"counterpart {target.name} unreachable; failure stays in the log: {detail}")
+        if target.state != "registered":
+            self.log(f"counterpart {target.name} is not registered; failure stays in the log: {detail}")
             return
-        message = f"prl: broker: {detail}"
-        delivered = self._send_pointer(target.pane, message)
-        self.log(f"notified {target.name} about {member_name}: {detail} ({'delivered' if delivered else 'unconfirmed'})")
+        outcome, problem = self._guarded_send(target, f"prl: broker: {detail}")
+        if outcome == "sent":
+            self.log(f"notified {target.name} about {member_name}: {detail} (delivered)")
+        elif outcome == "deregistered":
+            target.state = problem[0]
+            self.log(
+                f"counterpart {target.name} also failed a pre-send check ({problem[1]}) "
+                f"and was deregistered; failure stays in the log: {detail}"
+            )
+        else:
+            self.log(
+                f"could not notify {target.name} about {member_name} ({outcome}: "
+                f"{problem[1] if problem else 'pane did not react'}); failure stays in the log"
+            )
+
+    def _notify_parked_once(self, member: MemberState, direction: str) -> None:
+        """Tell the counterpart once that a pane is parked on a codex goal.
+
+        A plain wake cannot move a parked goal; 'roster.sh kick' can.  This
+        broker does not resume it.  The notice goes out once per parking
+        episode and is repeated only after the pane has unstuck and parked
+        again.
+        """
+        if member.parked_notified:
+            return
+        member.parked_notified = True
+        if direction == "member":
+            self._notify_counterpart(
+                member.name,
+                direction,
+                f"{member.name} is parked (Goal stalled); resume with "
+                f"'roster.sh kick {self.session_dir} {member.name}'",
+            )
+        else:
+            self._notify_counterpart(
+                member.name,
+                direction,
+                "the thinker pane is parked (Goal stalled); resume it by hand",
+            )
 
     def _handle_pane_problem(
-        self, member: MemberState, wake: WakeState, direction: str, instance: AgentInstance,
-        kind: str, detail: str, now: float,
+        self, member: MemberState, direction: str, instance: AgentInstance,
+        kind: str, detail: str,
     ) -> None:
-        """Apply a validation problem found before a send: park it, or
-        deregister the instance and tell the counterpart."""
-        if kind == "parked":
-            # A plain wake cannot move a parked goal; 'roster.sh kick' can.
-            # Tell the counterpart once and defer until the pane is no longer
-            # parked — this broker does not resume it.
-            if not member.parked_notified:
-                member.parked_notified = True
-                if direction == "member":
-                    self._notify_counterpart(
-                        member.name,
-                        direction,
-                        f"{member.name} is parked (Goal stalled); resume with "
-                        f"'roster.sh kick {self.session_dir} {member.name}'",
-                    )
-                else:
-                    self._notify_counterpart(
-                        member.name,
-                        direction,
-                        "the thinker pane is parked (Goal stalled); resume it by hand",
-                    )
-            wake.last_delivery_at = now
-            self.log(f"defer wake for {instance.name}: {detail}")
-            return
+        """Apply a terminal validation problem found before a send: deregister
+        the instance and tell the counterpart.  Parked panes are not terminal
+        and are handled at the call site."""
         instance.state = kind
         self.log(f"deregistered {instance.name}: {detail}")
         if direction == "member":
@@ -645,65 +808,74 @@ class WakeBroker:
                 continue
 
             if wake.delivered:
-                # The pointer is in the pane; now only the recipient's reply
-                # can move this.  The pane is re-validated when the ack window
+                # The pointer is in the pane; now only the recipient's ack can
+                # move this.  The pane is re-validated when the ack window
                 # expires, not on every scan, so a working member's evidence
                 # writes do not burn tmux calls.
-                if now - wake.last_delivery_at <= _ACK_TIMEOUT_SECONDS:
+                if now - wake.last_delivery_at <= self._ack_timeout_seconds:
                     continue
-                problem = self._validate_instance(instance)
-                if problem is not None:
-                    self._handle_pane_problem(member, wake, direction, instance, *problem, now)
+                message = self._wake_message(member, direction)
+                outcome, problem = self._guarded_send(instance, message)
+                if outcome == "deregistered":
+                    self._handle_pane_problem(member, direction, instance, *problem)
                     continue
-                member.parked_notified = False
-                if wake.renudges < _MAX_RENUDGES:
-                    message = self._wake_message(member, direction)
-                    self._send_pointer(instance.pane, message)
+                if outcome in ("sent", "unconfirmed"):
+                    # A send was attempted (typed), so it counts: the stall
+                    # report fires after _MAX_RENUDGES regardless of whether
+                    # the pane visibly reacted.  A fresh window starts either
+                    # way, so a working member is not nudged twice at once.
+                    member.parked_notified = False
                     wake.renudges += 1
                     wake.last_delivery_at = now
-                    self.log(f"re-nudged {instance.name} (no ack within {_ACK_TIMEOUT_SECONDS // 60}m)")
+                    if wake.renudges <= _MAX_RENUDGES:
+                        self.log(
+                            f"re-nudged {instance.name} (no ack within the window)"
+                            if outcome == "sent"
+                            else f"re-nudge to {instance.name} unconfirmed (no visible reaction)"
+                        )
+                    else:
+                        wake.reported = True
+                        self._notify_counterpart(
+                            member.name,
+                            direction,
+                            f"{instance.name} has not acknowledged its mailbox after {wake.renudges - 1} "
+                            f"re-nudges; check pane {instance.pane}",
+                        )
+                    continue
+                # deferred: nothing was typed, so it is held back, not counted.
+                if problem[0] == "parked":
+                    self._notify_parked_once(member, direction)
                 else:
-                    wake.reported = True
-                    self._notify_counterpart(
-                        member.name,
-                        direction,
-                        f"{instance.name} has not acknowledged its mailbox for "
-                        f"{_ACK_TIMEOUT_SECONDS // 60}m after {wake.renudges} re-nudges; "
-                        f"check pane {instance.pane}",
-                    )
+                    member.parked_notified = False
+                self.log(f"defer re-nudge for {instance.name}: {problem[1]}")
+                wake.last_delivery_at = now
                 continue
 
             if wake.next_attempt_at > now:
                 continue
 
-            problem = self._validate_instance(instance)
-            if problem is not None:
-                self._handle_pane_problem(member, wake, direction, instance, *problem, now)
+            message = self._wake_message(member, direction)
+            outcome, problem = self._guarded_send(instance, message)
+            if outcome == "deregistered":
+                self._handle_pane_problem(member, direction, instance, *problem)
+                continue
+            if outcome == "deferred" and problem[0] == "parked":
+                self._notify_parked_once(member, direction)
+                wake.deferrals += 1
+                wake.next_attempt_at = now + min(
+                    _DEFERRAL_CAP_SECONDS, _RETRY_BASE_SECONDS**wake.deferrals
+                )
+                self.log(f"defer wake for {instance.name}: {problem[1]}")
                 continue
             member.parked_notified = False
-
-            cursor_column = self._pane_format(instance.pane, "#{cursor_x}")
-            if cursor_column.isdigit() and int(cursor_column) > _EMPTY_INPUT_MAX_COLUMN:
+            if outcome == "deferred":
                 wake.deferrals += 1
                 wake.next_attempt_at = now + min(
                     _DEFERRAL_CAP_SECONDS, _RETRY_BASE_SECONDS**wake.deferrals
                 )
-                self.log(f"defer wake for {instance.name}: input line occupied (cursor column {cursor_column})")
+                self.log(f"defer wake for {instance.name}: {problem[1]}")
                 continue
-            if self._pane_is_busy(instance.pane):
-                wake.deferrals += 1
-                wake.next_attempt_at = now + min(
-                    _DEFERRAL_CAP_SECONDS, _RETRY_BASE_SECONDS**wake.deferrals
-                )
-                self.log(f"defer wake for {instance.name}: pane is mid-turn")
-                continue
-
-            message = self._wake_message(member, direction)
-            if self._send_pointer(instance.pane, message):
-                wake.delivered = True
-                wake.last_delivery_at = now
-                self.log(f"wake {instance.name} <- {message} (delivered)")
-            else:
+            if outcome == "unconfirmed":
                 wake.attempts += 1
                 if wake.attempts >= _MAX_SEND_ATTEMPTS:
                     wake.reported = True
@@ -719,6 +891,11 @@ class WakeBroker:
                         _RETRY_CAP_SECONDS, _RETRY_BASE_SECONDS * 2**wake.attempts
                     )
                     self.log(f"wake to {instance.name} unconfirmed (attempt {wake.attempts}); retrying")
+                continue
+            member.parked_notified = False
+            wake.delivered = True
+            wake.last_delivery_at = now
+            self.log(f"wake {instance.name} <- {message} (delivered)")
 
     # ----------------------------------------------------------------- scan
 
@@ -741,8 +918,12 @@ class WakeBroker:
             self._inotify_fd, os.fsencode(path), _WATCH_MASK
         )
         if watch_descriptor < 0:
-            errno = ctypes.get_errno()
-            self.log(f"could not watch {path}: {os.strerror(errno)}")
+            err = ctypes.get_errno()
+            # ENOENT is the atomic-rename pattern: the file was created and
+            # already renamed away before the watch could be added.  The
+            # rename's own event covers the final path, so nothing is lost.
+            if err != errno.ENOENT:
+                self.log(f"could not watch {path}: {os.strerror(err)}")
             return
         self._watched_paths.add(path)
         self._watch_descriptors[watch_descriptor] = path
@@ -771,6 +952,12 @@ class WakeBroker:
                         mailbox_path = member_dir / mailbox
                         if mailbox_path.is_file():
                             self._add_watch(mailbox_path)
+        # The agents directory is the one part of the broker's own directory
+        # that external writers (register-agent.sh) put files into, so it is
+        # watched; the rest of broker/ only the broker itself writes.
+        agents_dir = self.state_path.parent / "agents"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        self._add_watch(agents_dir)
         self._add_watch(self.requests_dir)
 
     def _handle_inotify_event(self, watch_descriptor: int, mask: int, name: str) -> None:
