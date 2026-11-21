@@ -38,12 +38,12 @@ scripts/broker.sh stop  --session /tmp/prl-demo    # back to watch.sh waiting
 ## How a round looks with the broker
 
 - **Thinker** writes `members/<name>/in`, then ends its turn instead of arming a watcher.
-- **Member** reads `in` (and `in-addendum`), **acks it**, does the work, writes `out`, then ends its turn.
-- **Thinker** reads `out`, **acks it**, writes the next `in` — or not.
+- **Member** read-acks `in` (and `in-addendum`), does the work, writes `out`, then ends its turn.
+- **Thinker** read-acks `out`, writes the next `in` — or not.
 - Each file write wakes the other side's pane within a second or two.
 
-On any wake: read the file the message names, do the work, write your file,
-yield again.
+On any wake: read-ack the file the message names, do the work, write your
+file, yield again.
 The message is not the task and not a report — the file is.
 
 ## Acknowledging a read
@@ -51,21 +51,28 @@ The message is not the task and not a report — the file is.
 Typing a message is not proof of reading, and a reply is not an ack either:
 the thinker may accept a final report without posting another task, and a
 worker may read a task and then work longer than any nudge window allows.
-So acknowledgement is explicit.  After reading a mailbox, run:
+So acknowledgement is explicit.  Read and ack in one operation:
 
 ```
-scripts/ack.sh /tmp/prl-demo worker in            # member acks its task
-scripts/ack.sh /tmp/prl-demo worker in-addendum   # and its addendum, when it has one
-scripts/ack.sh /tmp/prl-demo worker out           # thinker acks the report
+scripts/read-ack.sh /tmp/prl-demo worker in            # member reads its task
+scripts/read-ack.sh /tmp/prl-demo worker in-addendum   # and its addendum, when it has one
+scripts/read-ack.sh /tmp/prl-demo worker out           # thinker reads the report
 ```
 
-`ack.sh` records the file's exact revision (mtime in ns, size, content hash)
-in `<mailbox>.ack` next to the file.  The broker clears a pending wake only
-while the mailbox still matches the recorded revision, so:
+`read-ack.sh` opens the mailbox once, prints its content, and records the
+exact revision of that snapshot (mtime in ns, size, content hash) in
+`<mailbox>.ack` next to the file — so the output is precisely what was
+acknowledged.  Reading and acking as two steps would be racy: if report A is
+read, then atomically replaced by B before a separate ack runs, the ack would
+record B's revision and B would be treated as read without being read.
+Binding the revision to the snapshot that was read makes that impossible.
+
+The broker clears a pending wake only while the mailbox still matches the
+recorded revision, so:
 
 - acknowledging a final report removes the pending wake **without another
   `in` having to be posted**, and
-- a file rewritten after the ack no longer matches it, so **a stale ack can
+- a file rewritten after the read no longer matches it, so **a stale ack can
   never suppress a newer revision** — the newer write re-arms the wake.
 
 A wake that is not acknowledged is re-nudged (twice, through the same
@@ -79,7 +86,7 @@ side.  The ack window is 10 minutes by default;
   On startup it reads what is already on disk and wakes for work that was posted while it was down — an already-posted unread task or report is caught, not dropped.
 - **Acknowledgement.**
   A typed message is not proof of reading.
-  A wake is acknowledged only by an explicit `ack.sh` of the exact revision that was read (see above); until then the wake stays pending, and after 10 minutes without an ack the broker re-nudges (twice), then tells the other side the recipient has not acknowledged and to check the pane.
+  A wake is acknowledged only by a `read-ack.sh` of the exact revision that was read (see above); until then the wake stays pending, and after 10 minutes without an ack the broker re-nudges (twice), then tells the other side the recipient has not acknowledged and to check the pane.
 - **Pending work.**
   If the recipient is mid-turn, its input line is occupied, or a send cannot be confirmed, the wake is kept and retried with backoff.
   Busy panes are deferred without limit (a long build is not a failure); unconfirmed sends are retried up to 10 times, after which the failure is reported to the other side and the work stays in the mailbox files.
@@ -121,12 +128,19 @@ A parked codex goal (`Goal stalled`) is recognised and the thinker is told to
 
 The pane-level checks pin the pane, but a pane holds a shell that can run any
 number of processes over its life.  To pin the exact process the broker may
-wake, the agent registers itself once it is up — from a command it runs, that
-is simply `$$`:
+wake, the agent registers itself once it is up, from a command it executes:
 
 ```
-scripts/register-agent.sh /tmp/prl-demo worker $$
+scripts/register-agent.sh /tmp/prl-demo worker
 ```
+
+With no pid given, the script finds the agent from this shell's own ancestry:
+`TMUX_PANE` (inherited from the pane's shell) names the pane, `pane_pid` gives
+the pane's shell, and the agent is the pane-shell's child in the chain from
+this shell up.  That is the right answer from an agent's tool shell, where
+`$$` is the tool's bash and exits the moment the command finishes — it is
+**not** the agent.  An explicit pid is still accepted
+(`scripts/register-agent.sh /tmp/prl-demo worker 12345`) and recorded as-is.
 
 This records the agent's pid and its `/proc` start time in
 `<session>/broker/agents/<name>`.  With an identity recorded, the broker

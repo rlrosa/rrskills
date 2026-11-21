@@ -8,12 +8,15 @@ recipient's registered pane, and when a send cannot be confirmed it keeps the
 work pending with bounded retries instead of dropping it.
 
 A wake is a pointer, never content: the message names the file to read.  A
-wake is considered acknowledged only by an explicit ack of the exact revision
-read: the reader runs `scripts/ack.sh <session> <name> <mailbox>` after
-reading, which records the file's mtime/size/sha256 next to it.  Typing a
-message is not proof of reading, and a reply is not an ack either — the
-thinker may accept a final report without posting another task, and a worker
-may read a task and then work longer than any nudge window allows.
+wake is considered acknowledged only by an explicit read-ack of the exact
+revision read: the reader runs `scripts/read-ack.sh <session> <name>
+<mailbox>`, which prints the content and records that snapshot's
+mtime/size/sha256 next to the file.  Reading and acking as two steps is racy
+(a replacement between the steps would be acked without being read), so the
+operation is one.  Typing a message is not proof of reading, and a reply is
+not an ack either — the thinker may accept a final report without posting
+another task, and a worker may read a task and then work longer than any
+nudge window allows.
 
 Linux only: file changes are detected with inotify.  The broker never creates
 panes, never restarts agents, and never touches a pane that is not registered
@@ -525,7 +528,8 @@ class WakeBroker:
         A wake exists while any mailbox the recipient owes a read on is not
         acked at its current revision: for the member, `in` and (when
         non-empty) `in-addendum`; for the thinker, `out`.  Acknowledgement is
-        explicit — the reader runs ack.sh after reading — so a final report
+        explicit — the reader runs read-ack.sh, which prints the content and
+        records its snapshot's revision — so a final report
         is cleared without another task being posted, and a long task never
         earns a false re-nudge.
         """

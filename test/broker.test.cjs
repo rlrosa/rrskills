@@ -8,7 +8,7 @@ const scriptsDir = path.join(repoRoot, 'skills', 'paired-review-loop', 'scripts'
 const session = path.join(scriptsDir, 'session.sh');
 const roster = path.join(scriptsDir, 'roster.sh');
 const broker = path.join(scriptsDir, 'broker.sh');
-const ack = path.join(scriptsDir, 'ack.sh');
+const readAck = path.join(scriptsDir, 'read-ack.sh');
 const registerAgent = path.join(scriptsDir, 'register-agent.sh');
 
 function hasTmux() {
@@ -285,35 +285,45 @@ try {
   console.log('ok 1 - two-way handoff wakes both panes');
 
   // ------------------------------------------------------------------
-  // 2. Explicit acks.  The thinker reads and acks the final report: the
-  //    pending wake is removed WITHOUT another in being posted.  A newer
-  //    report re-arms the wake, so a stale ack does not suppress it; the
-  //    member side acks its task the same way.
+  // 2. Read-acks, and the A->B race.  The thinker read-acks report A: the
+  //    printed content is exactly what was acknowledged, and the pending
+  //    wake is removed WITHOUT another in being posted.  B is then written
+  //    over A's ack: because the ack records A's snapshot revision, B's
+  //    wake re-arms instead of disappearing.  The member side read-acks its
+  //    task the same way.
   // ------------------------------------------------------------------
-  assert.strictEqual(runScript(ack, [sessionDir, 'worker', 'out']).code, 0, 'ack.sh out');
-  waitForLog(sessionDir, /worker: report acknowledged/, 'the ack of the final report');
+  const ackA = runScript(readAck, [sessionDir, 'worker', 'out']);
+  assert.strictEqual(ackA.code, 0, `read-ack.sh out: ${ackA.stderr}`);
+  assert(ackA.stdout.includes('report-1'), 'read-ack must print the content it acknowledged');
+  waitForLog(sessionDir, /worker: report acknowledged/, 'the ack of report A');
   assert(
     statusOutput().includes('wake->thinker -'),
-    `the thinker wake should be cleared by the ack, got: ${statusOutput()}`,
+    `the thinker wake should be cleared by the read-ack, got: ${statusOutput()}`,
   );
+  // The race: A is acknowledged, then atomically replaced by B.  The ack of
+  // A must not match B, so B's wake re-arms.
   fs.writeFileSync(outPath, 'report-2\n');
-  waitForLogCount(sessionDir, /worker: pending wake to thinker/, 2, 'the re-armed wake for report-2');
-  assert.strictEqual(runScript(ack, [sessionDir, 'worker', 'out']).code, 0, 'ack.sh out again');
-  waitForLogCount(sessionDir, /worker: report acknowledged/, 2, 'the ack of report-2');
+  waitForLogCount(sessionDir, /worker: pending wake to thinker/, 2, 'the re-armed wake for report B');
+  const ackB = runScript(readAck, [sessionDir, 'worker', 'out']);
+  assert.strictEqual(ackB.code, 0, `read-ack.sh out again: ${ackB.stderr}`);
+  assert(ackB.stdout.includes('report-2'), 'read-ack must print the newer content');
+  waitForLogCount(sessionDir, /worker: report acknowledged/, 2, 'the ack of report B');
 
   fs.writeFileSync(inPath, 'task-ack\n');
   const workerWakeCount = countMatches(paneHistory(workerPane), /GOT\[worker\]: prl:/);
   waitForPaneCount(workerPane, /GOT\[worker\]: prl:/, workerWakeCount + 1, 'the wake for task-ack');
-  assert.strictEqual(runScript(ack, [sessionDir, 'worker', 'in']).code, 0, 'ack.sh in');
+  const ackIn = runScript(readAck, [sessionDir, 'worker', 'in']);
+  assert.strictEqual(ackIn.code, 0, `read-ack.sh in: ${ackIn.stderr}`);
+  assert(ackIn.stdout.includes('task-ack'), 'read-ack must print the task it acknowledged');
   // The addendum from scenario 1 is still owed a read, so it needs its own
-  // ack before the member wake can clear.
-  assert.strictEqual(runScript(ack, [sessionDir, 'worker', 'in-addendum']).code, 0, 'ack.sh in-addendum');
-  waitForLog(sessionDir, /worker: task acknowledged/, 'the member ack of its task');
+  // read-ack before the member wake can clear.
+  assert.strictEqual(runScript(readAck, [sessionDir, 'worker', 'in-addendum']).code, 0, 'read-ack.sh in-addendum');
+  waitForLog(sessionDir, /worker: task acknowledged/, 'the member read-ack of its task');
   assert(
     statusOutput().includes('wake->member -'),
-    `the member wake should be cleared by the ack, got: ${statusOutput()}`,
+    `the member wake should be cleared by the read-ack, got: ${statusOutput()}`,
   );
-  console.log('ok 2 - acks remove pending work; a stale ack does not suppress a newer revision');
+  console.log('ok 2 - read-acks remove pending work; an ack of A does not suppress a newer B');
 
   // ------------------------------------------------------------------
   // 3. Already-posted unread work is caught on broker startup: the broker is
@@ -402,7 +412,7 @@ try {
   // ------------------------------------------------------------------
   // Clear the pending wake from scenario 6 so no delivery can land in this
   // scenario's pane before the identity checks begin.
-  assert.strictEqual(runScript(ack, [sessionDir, 'worker', 'in']).code, 0, 'clear the pending wake');
+  assert.strictEqual(runScript(readAck, [sessionDir, 'worker', 'in']).code, 0, 'clear the pending wake');
   waitForLogCount(sessionDir, /worker: task acknowledged/, 2, 'the clear of scenario 6\'s pending wake');
   tmux(['new-session', '-d', '-s', 'worker-shell', '-x', '160', '-y', '40', 'bash --norc --noprofile']);
   const shellPane = tmux(['list-panes', '-t', 'worker-shell', '-F', '#{pane_id}']);
@@ -427,7 +437,7 @@ try {
   fs.writeFileSync(inPath, 'task-id-A\n');
   waitForPaneCount(shellPane, /GOT\[worker\]: prl: your inbox was updated/, 1, 'the wake while agent A is registered');
   // Ack so no re-nudge can fire while the agent is killed and restarted.
-  assert.strictEqual(runScript(ack, [sessionDir, 'worker', 'in']).code, 0, 'ack task-id-A');
+  assert.strictEqual(runScript(readAck, [sessionDir, 'worker', 'in']).code, 0, 'read-ack task-id-A');
   // Agent A dies back to the shell; agent B (same binary) starts in its place.
   execFileSync('kill', [agentPidA]);
   waitForPaneCommand(shellPane, 'bash');

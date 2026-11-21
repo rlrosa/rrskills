@@ -8,8 +8,8 @@ When the opt-in [broker](BROKER.md) is running for the session, the watcher is
 not yours to arm.
 The broker watches the mailbox files and types a one-line pointer into your
 pane the moment the other side writes.
-Your loop is: read the file the wake names, **ack it**, do the work, write
-your file, **end your turn**, and act on the next wake when it lands.
+Your loop is: read-ack the file the wake names, do the work, write your
+file, **end your turn**, and act on the next wake when it lands.
 No recurring watcher, no idle model turns.
 
 Three rules keep this honest:
@@ -20,11 +20,13 @@ Three rules keep this honest:
   Read the file it names.
   If you wake and the broker's log shows it could not reach your pane, say so
   in your `out` and fall back to a watcher.
-- **Ack what you read, right after reading it** — `scripts/ack.sh <session> <name> <mailbox>` (`in`, `in-addendum`, or `out`, as applies to you).
-  A pending wake is cleared only by an ack of the exact revision you read, so
-  a final report is closed without another task being posted, a long task
-  never earns a false re-nudge, and a file rewritten after your ack re-arms
-  the wake instead of being suppressed by your stale ack.
+- **Read-ack what the wake names, right after waking** — `scripts/read-ack.sh <session> <name> <mailbox>` (`in`, `in-addendum`, or `out`, as applies to you).
+  It prints the content and records the exact revision of that snapshot, so
+  the output is precisely what was acknowledged.
+  A pending wake is cleared only by that ack, so a final report is closed
+  without another task being posted, a long task never earns a false
+  re-nudge, and a file rewritten after your read re-arms the wake instead of
+  being suppressed by your stale ack.
 
 Everything below is the fallback: the protocol with no broker, or with a
 broker that is down.
